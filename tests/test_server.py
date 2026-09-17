@@ -42,6 +42,27 @@ class ServerTest(unittest.TestCase):
         (self.out / "today.png").write_bytes(content)
         (self.out / "today.json").write_text(json.dumps({"date": "2026-09-18"}))
 
+    def write_real_frame(self, seed=0):
+        from PIL import Image, ImageDraw
+
+        im = Image.new("1", (800, 480), 1)
+        ImageDraw.Draw(im).rectangle([10 + seed, 10, 200, 200], fill=0)
+        im.save(self.out / "today.png")
+        (self.out / "today.json").write_text("{}")
+
+    def test_bmp_is_what_old_firmware_wants(self):
+        self.write_real_frame()
+        code, hdr, body = self.get("/today.bmp")
+        self.assertEqual((code, hdr["Content-Type"]), (200, "image/bmp"))
+        self.assertEqual(body[:2], b"BM")
+        self.assertEqual(len(body), 48062)  # 62-byte header + 800*480/8, firmware 1.5.x checks this exactly
+        # setup points at the bmp, display at the png
+        self.assertTrue(json.loads(self.get("/api/setup", {"Host": "h:1"})[2])["image_url"].endswith("/today.bmp"))
+        self.assertTrue(json.loads(self.get("/api/display", {"Host": "h:1"})[2])["image_url"].endswith("/today.png"))
+        # cache follows the frame
+        self.write_real_frame(seed=5)
+        self.assertNotEqual(self.get("/today.bmp")[2], body)
+
     # ---- static
     def test_no_frame_yet(self):
         for p in (self.out / "today.png", self.out / "today.json"):
@@ -73,7 +94,7 @@ class ServerTest(unittest.TestCase):
         code, _, body = self.get("/api/setup", {"ID": "AA:BB:CC:DD:EE:FF", "Host": "mini.local:8787"})
         d = json.loads(body)
         self.assertEqual(d["status"], 200)
-        self.assertEqual(d["image_url"], "http://mini.local:8787/today.png")
+        self.assertEqual(d["image_url"], "http://mini.local:8787/today.bmp")
         self.assertTrue(d["api_key"] and d["friendly_id"])
         seen = json.loads((self.out / "device.json").read_text())
         self.assertEqual(seen["ID"], "AA:BB:CC:DD:EE:FF")

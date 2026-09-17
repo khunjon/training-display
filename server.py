@@ -4,6 +4,7 @@
 Routes
   /                today.png in a phone-sized page that refreshes itself
   /today.png       the frame render.py wrote (800x480, 1-bit)
+  /today.bmp       the same frame as a 1-bit BMP (what /api/setup points at)
   /today.json      the data behind it
   /health          {"ok": true, "age_s": ...}
   /api/setup       TRMNL: {status: 200, api_key, friendly_id, image_url, message}
@@ -80,11 +81,35 @@ class State:
             return None
         return data, "today-" + hashlib.sha1(data).hexdigest()[:10] + ".png"
 
-    def image_url(self, host_header: str | None) -> str:
+    _bmp_cache: tuple[bytes, bytes] | None = None  # (png bytes it was made from, bmp bytes)
+
+    def frame_bmp(self) -> bytes | None:
+        """The frame as a 1-bit BMP (48,062 bytes at 800x480).
+
+        Older TRMNL firmware (1.5.x) accepts PNG from /api/display but the setup
+        step downloads the /api/setup image_url and insists on a BMP of exactly
+        that size, so the setup logo is served as BMP.
+        """
+        fr = self.frame()
+        if not fr:
+            return None
+        if self._bmp_cache and self._bmp_cache[0] == fr[0]:
+            return self._bmp_cache[1]
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.open(io.BytesIO(fr[0])).convert("1", dither=Image.NONE).save(buf, "BMP")
+        self._bmp_cache = (fr[0], buf.getvalue())
+        return self._bmp_cache[1]
+
+    def image_url(self, host_header: str | None, ext: str = "png") -> str:
         if self.opts.get("image_url"):
-            return self.opts["image_url"]
+            url = self.opts["image_url"]
+            return url[: -len(".png")] + f".{ext}" if url.endswith(".png") else url
         host = host_header or f"localhost:{self.opts['port']}"
-        return f"http://{host}/today.png"
+        return f"http://{host}/today.{ext}"
 
     def note_device(self, headers, path: str) -> None:
         keep = ("ID", "FW-Version", "Model", "Battery-Voltage", "Battery-Charging", "USB-Connected",
@@ -141,6 +166,12 @@ def make_handler(state: State):
                     self._send(404, b"no frame rendered yet\n", "text/plain")
                     return
                 self._send(200, fr[0], "image/png", {"Content-Disposition": f'inline; filename="{fr[1]}"'})
+            elif route == "/today.bmp":
+                bmp = state.frame_bmp()
+                if not bmp:
+                    self._send(404, b"no frame rendered yet\n", "text/plain")
+                    return
+                self._send(200, bmp, "image/bmp")
             elif route == "/today.json":
                 try:
                     body = (state.output_dir / "today.json").read_bytes()
@@ -161,7 +192,7 @@ def make_handler(state: State):
                         "status": 200,
                         "api_key": "lan",  # the firmware stores and echoes this; nothing checks it
                         "friendly_id": state.opts["friendly_id"],
-                        "image_url": state.image_url(self.headers.get("Host")),
+                        "image_url": state.image_url(self.headers.get("Host"), "bmp"),
                         "message": "Training Display: registered",
                     }
                 )
