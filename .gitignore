@@ -1,0 +1,15 @@
+# secrets and local state never live here
+config.json
+sa.json
+*.pem
+
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+
+# rendered output
+today.png
+today.json
+events-*.json
+!fixtures/*.json

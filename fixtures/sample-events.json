@@ -1,0 +1,16 @@
+[
+  {
+    "summary": "Threshold 3 × 10 min",
+    "location": "Track",
+    "creator": {"email": "alex@example.com"},
+    "start": {"dateTime": "2026-09-18T18:00:00+07:00"},
+    "end": {"dateTime": "2026-09-18T19:30:00+07:00"}
+  },
+  {
+    "summary": "Yoga",
+    "location": "Studio",
+    "creator": {"email": "sam@example.com"},
+    "start": {"dateTime": "2026-09-18T19:00:00+07:00"},
+    "end": {"dateTime": "2026-09-18T20:00:00+07:00"}
+  }
+]

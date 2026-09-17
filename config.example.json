@@ -1,0 +1,23 @@
+{
+  "calendar_id": "xxxxxxxxxxxxxxxx@group.calendar.google.com",
+  "service_account_key": "~/.config/training-display/sa.json",
+  "timezone": "Asia/Bangkok",
+
+  "people": [
+    {
+      "name": "Alex",
+      "emails": ["alex@example.com"],
+      "activity_log": "~/vault/health/Exercise/activity_log.csv"
+    },
+    {
+      "name": "Sam",
+      "emails": ["sam@example.com"]
+    }
+  ],
+
+  "goals_dir": "~/vault/health/Goals",
+  "quotes_file": "~/vault/ai/Projects/Training Display Quotes.md",
+
+  "fonts_dir": "~/.local/state/training-display/fonts",
+  "output_dir": "~/.local/state/training-display"
+}
