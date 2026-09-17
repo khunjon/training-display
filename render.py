@@ -305,6 +305,22 @@ def _draw_heart(d, x: int, y: int, size: int, fill=0):
     d.polygon([(x, y + r), (x + 4 * r, y + r), (x + 2 * r, y + size)], fill=fill)
 
 
+def _draw_cake(d, x: int, y: int, size: int, fill=0):
+    """A two-tier cake with a lit candle, bounding box top-left at (x, y)."""
+    s = size / 40  # designed on a 40x40 grid
+    # three candles with teardrop flames
+    for cx in (x + 11 * s, x + 20 * s, x + 29 * s):
+        d.polygon([(cx, y), (cx + 3 * s, y + 6 * s), (cx, y + 9 * s), (cx - 3 * s, y + 6 * s)], fill=fill)
+        d.rectangle([cx - 1.5 * s, y + 10 * s, cx + 1.5 * s, y + 19 * s], fill=fill)
+    # top tier (outlined) and bottom tier (solid) with a plate line
+    d.rounded_rectangle([x + 6 * s, y + 19 * s, x + 34 * s, y + 29 * s], radius=int(3 * s), outline=fill, width=max(2, int(2 * s)))
+    d.rectangle([x + 2 * s, y + 29 * s, x + 38 * s, y + 38 * s], fill=fill)
+    d.line([(x, y + 40 * s), (x + 40 * s, y + 40 * s)], fill=fill, width=max(2, int(2 * s)))
+
+
+ICONS = {"heart": _draw_heart, "cake": _draw_cake}
+
+
 def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None = None) -> dict:
     tz = ZoneInfo(cfg["timezone"])
     sessions = resolve(events, day, cfg["people"], tz)
@@ -321,7 +337,7 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
         "rows": rows,
         "quote": special[:2] if special else quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
         "special": special is not None,  # a message, not a quotation: drawn without quote marks
-        "icon": special[2] if special else "",  # "heart" draws one beside the message
+        "icon": special[2] if special else "",  # "heart" or "cake", drawn beside the message
         "updated": (now or dt.datetime.now(tz)).strftime("%H:%M"),
     }
 
@@ -424,9 +440,9 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
     if q:
         text, author = q
         qx = M
-        if data.get("icon") == "heart":
-            _draw_heart(d, M, qy + 22, 36)
-            qx = M + 52
+        if data.get("icon") in ICONS:
+            ICONS[data["icon"]](d, M, qy + 18, 44)
+            qx = M + 62
         size = 34
         while True:
             f = cond_semi(size)

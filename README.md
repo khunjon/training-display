@@ -100,7 +100,7 @@ words like *run, threshold, tempo, intervals, long run* → run; *strength, gym*
   One per day, rotating.
 - **Special days:** `special_days` in the config replaces the quote on a date: `{"date": "MM-DD",
   "text": "...", "author": "...", "since": 2024}`. `{n}` / `{nth}` in the text become the years
-  since `since` ("2" / "2nd"); `author` is optional; `"icon": "heart"` draws a heart beside it.
+  since `since` ("2" / "2nd"); `author` is optional; `"icon": "heart"` or `"cake"` draws one beside it.
 
 ## Tests
 

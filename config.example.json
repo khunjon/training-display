@@ -20,8 +20,8 @@
 
   "special_days": [
     {"date": "09-22", "text": "Happy {nth} anniversary, Alex & Sam", "since": 2024, "icon": "heart"},
-    {"date": "09-07", "text": "Happy birthday, Sam!"},
-    {"date": "12-19", "text": "Happy birthday, Alex!"}
+    {"date": "09-07", "text": "Happy birthday, Sam!", "icon": "cake"},
+    {"date": "12-19", "text": "Happy birthday, Alex!", "icon": "cake"}
   ],
 
   "fonts_dir": "~/.local/state/training-display/fonts",
