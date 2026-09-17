@@ -128,6 +128,31 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(code, 204)
 
 
+class QuietHours(unittest.TestCase):
+    OPTS = {"refresh_rate": 3600, "quiet": {"from": "23:00", "until": "06:10"}}
+
+    def at(self, h, m):
+        import datetime as dt
+
+        return dt.datetime(2026, 9, 18, h, m)
+
+    def test_daytime_is_normal(self):
+        self.assertEqual(s.refresh_rate_at(self.at(12, 0), self.OPTS), 3600)
+        self.assertEqual(s.refresh_rate_at(self.at(22, 59), self.OPTS), 3600)
+        self.assertEqual(s.refresh_rate_at(self.at(6, 10), self.OPTS), 3600)
+
+    def test_night_sleeps_until_morning(self):
+        self.assertEqual(s.refresh_rate_at(self.at(23, 0), self.OPTS), 7 * 3600 + 10 * 60)
+        self.assertEqual(s.refresh_rate_at(self.at(2, 30), self.OPTS), 3 * 3600 + 40 * 60)
+        self.assertEqual(s.refresh_rate_at(self.at(6, 9), self.OPTS), 60)  # floor
+
+    def test_disabled_and_same_day_window(self):
+        self.assertEqual(s.refresh_rate_at(self.at(1, 0), {"refresh_rate": 900, "quiet": None}), 900)
+        day = {"refresh_rate": 900, "quiet": {"from": "13:00", "until": "14:00"}}
+        self.assertEqual(s.refresh_rate_at(self.at(13, 30), day), 1800)
+        self.assertEqual(s.refresh_rate_at(self.at(1, 0), day), 900)
+
+
 class Options(unittest.TestCase):
     def test_config_then_cli(self):
         o = s.server_options({"server": {"port": 9000, "refresh_rate": 1800}}, {"port": None, "bind": "127.0.0.1"})

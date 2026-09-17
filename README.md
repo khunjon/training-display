@@ -72,8 +72,9 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
 6. **Serve.** `venv/bin/python server.py` binds `0.0.0.0:8787` (LAN only — put it behind nothing
    that forwards from the internet). Routes: `/` (phone page), `/today.png`, `/today.json`, `/health`,
    and the TRMNL protocol `/api/setup`, `/api/display`, `/api/log`. An optional `"server"` block in
-   the config sets `bind`, `port`, `refresh_rate` (device sleep, seconds) and `image_url` (only if the
-   device cannot reuse the host it reached you on, e.g. behind a proxy).
+   the config sets `bind`, `port`, `refresh_rate` (device sleep, seconds), `quiet` (`{"from": "23:00",
+   "until": "06:10"}`: the device sleeps through the window in one go; `null` disables) and `image_url`
+   (only if the device cannot reuse the host it reached you on, e.g. behind a proxy).
 7. **Schedule (macOS).** `scripts/install_launchd.sh` installs two launchd agents: the renderer at
    06:00 then hourly to 21:00 (and on load), and the server kept alive. `--guard path/to/wrapper.sh`
    wraps the render job in your own notify-on-failure script; `--uninstall` removes both.
@@ -97,7 +98,8 @@ words like *run, threshold, tempo, intervals, long run* → run; *strength, gym*
 - **Activity log:** a CSV with `date,type,name,...` and optionally `distance_km, pace_min_km, avg_hr,
   moving_time, location`. `type` of `run` or `weight_training` matches run/strength sessions.
 - **Quotes:** a Markdown file; every line starting `- ` is a quote, ideally `- "text" — author`.
-  One per day, rotating.
+  One per day, rotating. A trailing `#rest` tag marks a quote for rest and mobility days only;
+  untagged quotes are for training days. Each pool rotates on its own.
 - **Special days:** `special_days` in the config replaces the quote on a date: `{"date": "MM-DD",
   "text": "...", "author": "...", "since": 2024}`. `{n}` / `{nth}` in the text become the years
   since `since` ("2" / "2nd"); `author` is optional; `"icon": "heart"` or `"cake"` draws one beside it.

@@ -150,12 +150,28 @@ class Quotes(unittest.TestCase):
             p = Path(t) / "q.md"
             p.write_text('# Quotes\n\nintro line\n- "First one." — A. Person\n- “Second one.” — B. Person\n- Bare quote\n')
             qs = r.load_quotes(p)
-            self.assertEqual(qs, [("First one.", "A. Person"), ("Second one.", "B. Person"), ("Bare quote", "")])
+            self.assertEqual(qs, [("First one.", "A. Person", set()), ("Second one.", "B. Person", set()), ("Bare quote", "", set())])
             a = r.quote_for(dt.date(2026, 9, 17), qs)
             self.assertEqual(a, r.quote_for(dt.date(2026, 9, 17), qs))
             self.assertNotEqual(a, r.quote_for(dt.date(2026, 9, 18), qs))
             self.assertIsNone(r.quote_for(DAY, []))
             self.assertEqual(r.load_quotes(None), [])
+
+    def test_rest_tag(self):
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "q.md"
+            p.write_text('- "Go." — A #Rest\n- "Push." — B\n- "Sleep." — C #rest #calm\n- "Move." — D\n')
+            qs = r.load_quotes(p)
+            self.assertEqual(qs[0], ("Go.", "A", {"rest"}))  # tag stripped from the author, case-folded
+            self.assertEqual(qs[2][2], {"rest", "calm"})
+            for d in range(10):
+                day = DAY + dt.timedelta(days=d)
+                self.assertIn(r.quote_for(day, qs, kind="rest")[0], ("Go.", "Sleep."))
+                self.assertIn(r.quote_for(day, qs, kind="run")[0], ("Push.", "Move."))
+                self.assertIn(r.quote_for(day, qs)[0], ("Push.", "Move."))  # no kind = training pool
+            # no tagged quotes at all -> rest days fall back to the full list
+            only_plain = [q for q in qs if not q[2]]
+            self.assertIn(r.quote_for(DAY, only_plain, kind="rest")[0], ("Push.", "Move."))
 
 
 class Build(unittest.TestCase):

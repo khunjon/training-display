@@ -31,6 +31,7 @@
     "bind": "0.0.0.0",
     "port": 8787,
     "refresh_rate": 3600,
+    "quiet": {"from": "23:00", "until": "06:10"},
     "friendly_id": "training-display"
   }
 }

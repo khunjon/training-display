@@ -18,6 +18,9 @@ TRMNL notes (from the open-source firmware, 2026-09):
     the device poll fast, so this server never sends it.
   - The image is fetched from `image_url`, which must be reachable from the
     device: by default it is built from the Host header the device used.
+  - `refresh_rate` is the device's sleep. Inside the configured quiet window
+    (default 23:00-06:10) it is "until the window ends", so the panel sleeps
+    through the night in one go.
 
 Stdlib only; no auth (LAN only by design — see README). Writes only
 <output_dir>/device.json, the last headers a device sent, for debugging.
@@ -38,6 +41,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from render import DEFAULT_CONFIG, load_config
 
@@ -45,9 +49,37 @@ DEFAULTS = {
     "bind": "0.0.0.0",
     "port": 8787,
     "refresh_rate": 3600,  # seconds the device sleeps between fetches
+    "quiet": {"from": "23:00", "until": "06:10"},  # overnight the device sleeps straight through; null to disable
     "friendly_id": "training-display",
     "image_url": None,  # e.g. "http://192.168.1.10:8787/today.png"; default: from the Host header
+    "timezone": "UTC",  # copied from the top-level config
 }
+
+
+def _hm(s: str) -> dt.time:
+    h, m = s.split(":")
+    return dt.time(int(h), int(m))
+
+
+def refresh_rate_at(now: dt.datetime, opts: dict) -> int:
+    """Seconds the device should sleep: the normal rate, or until the quiet window ends.
+
+    The window may cross midnight (23:00 -> 06:10). Inside it, sleep until `until`,
+    capped so a clock skew never yields something absurd; never below 60 s.
+    """
+    rate = int(opts["refresh_rate"])
+    q = opts.get("quiet")
+    if not q:
+        return rate
+    start, end = _hm(q["from"]), _hm(q["until"])
+    t = now.time().replace(second=0, microsecond=0)
+    inside = (start <= t or t < end) if start > end else (start <= t < end)
+    if not inside:
+        return rate
+    wake = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+    if wake <= now:
+        wake += dt.timedelta(days=1)
+    return max(60, min(int((wake - now).total_seconds()), 24 * 3600))
 
 PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -209,7 +241,7 @@ def make_handler(state: State):
                         "image_url": state.image_url(self.headers.get("Host")),
                         "image_url_timeout": 30,
                         "filename": fr[1],
-                        "refresh_rate": int(state.opts["refresh_rate"]),
+                        "refresh_rate": refresh_rate_at(dt.datetime.now(ZoneInfo(state.opts["timezone"])), state.opts),
                         "update_firmware": False,
                         "firmware_url": None,
                         "reset_firmware": False,
@@ -238,6 +270,7 @@ def make_handler(state: State):
 
 def server_options(cfg: dict, overrides: dict | None = None) -> dict:
     opts = dict(DEFAULTS)
+    opts["timezone"] = cfg.get("timezone", "UTC")
     opts.update(cfg.get("server") or {})
     opts.update({k: v for k, v in (overrides or {}).items() if v is not None})
     return opts

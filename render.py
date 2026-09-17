@@ -253,8 +253,11 @@ def race_countdown(day: dt.date, goals_dir: Path | None) -> dict | None:
     return best
 
 
-def load_quotes(path: Path | None) -> list[tuple[str, str]]:
-    """Bulleted lines `- "text" — author`; everything else in the file is ignored."""
+def load_quotes(path: Path | None) -> list[tuple[str, str, set[str]]]:
+    """Bulleted lines `- "text" — author #tag`; everything else in the file is ignored.
+
+    Trailing `#tags` are stripped from the line and returned as the third element.
+    """
     out = []
     if not path or not path.exists():
         return out
@@ -262,16 +265,30 @@ def load_quotes(path: Path | None) -> list[tuple[str, str]]:
         if not line.startswith("- "):
             continue
         body = line[2:].strip()
+        tags = set()
+        while (m := re.search(r"\s+#([\w-]+)$", body)):
+            tags.add(m.group(1).lower())
+            body = body[: m.start()]
         m = re.match(r'^[“"](.+?)[”"]\s*[—–-]\s*(.+)$', body)
-        out.append((m.group(1).strip(), m.group(2).strip()) if m else (body.strip('"“”'), ""))
+        text, author = (m.group(1).strip(), m.group(2).strip()) if m else (body.strip('"“”'), "")
+        out.append((text, author, tags))
     return out
 
 
-def quote_for(day: dt.date, quotes: list[tuple[str, str]]) -> tuple[str, str] | None:
-    """Rotate through the list one per day: stable within a day, consecutive days differ."""
+def quote_for(day: dt.date, quotes: list[tuple], kind: str | None = None) -> tuple[str, str] | None:
+    """Rotate one quote per day: stable within a day, consecutive days differ.
+
+    `kind` is the first person's session kind. On a rest day the rotation runs over
+    quotes tagged #rest; on other days over untagged ones. Each pool rotates on its
+    own, so a rest quote never spends a training-day slot. Missing pool -> all.
+    """
     if not quotes:
         return None
-    return quotes[day.toordinal() % len(quotes)]
+    tagged = [q for q in quotes if "rest" in (q[2] if len(q) > 2 else ())]
+    plain = [q for q in quotes if q not in tagged]
+    pool = (tagged if kind == "rest" else plain) or quotes
+    q = pool[day.toordinal() % len(pool)]
+    return (q[0], q[1])
 
 
 def _ordinal(n: int) -> str:
@@ -330,12 +347,14 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
         log = _p(p.get("activity_log"))
         sess = sessions[p["name"]] or logged_session(day, log)
         rows.append({"name": p["name"], "session": sess, "done": done_state(day, sess["kind"], log) if sess else None})
+    first = rows[0]["session"] if rows else None
+    first_kind = first["kind"] if first else None
     return {
         "date": day.isoformat(),
         "date_label": day.strftime("%a %d %b").upper(),
         "race": race_countdown(day, _p(cfg.get("goals_dir"))),
         "rows": rows,
-        "quote": special[:2] if special else quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
+        "quote": special[:2] if special else quote_for(day, load_quotes(_p(cfg.get("quotes_file"))), kind=first_kind),
         "special": special is not None,  # a message, not a quotation: drawn without quote marks
         "icon": special[2] if special else "",  # "heart" or "cake", drawn beside the message
         "updated": (now or dt.datetime.now(tz)).strftime("%H:%M"),
