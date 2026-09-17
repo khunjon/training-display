@@ -19,7 +19,7 @@
   "quotes_file": "~/vault/ai/Projects/Training Display Quotes.md",
 
   "special_days": [
-    {"date": "09-22", "text": "Happy {nth} anniversary, Alex & Sam", "since": 2024},
+    {"date": "09-22", "text": "Happy {nth} anniversary, Alex & Sam", "since": 2024, "icon": "heart"},
     {"date": "09-07", "text": "Happy birthday, Sam!"},
     {"date": "12-19", "text": "Happy birthday, Alex!"}
   ],

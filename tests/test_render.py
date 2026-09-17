@@ -195,23 +195,29 @@ class Render(unittest.TestCase):
 
 class SpecialDays(unittest.TestCase):
     DAYS = [
-        {"date": "09-22", "text": "Happy {nth} anniversary, A & S", "since": 2024},
+        {"date": "09-22", "text": "Happy {nth} anniversary, A & S", "since": 2024, "icon": "heart"},
         {"date": "12-19", "text": "Happy birthday!", "author": "everyone"},
     ]
 
     def test_anniversary_counts_years(self):
-        self.assertEqual(r.special_for(dt.date(2026, 9, 22), self.DAYS), ("Happy 2nd anniversary, A & S", ""))
-        self.assertEqual(r.special_for(dt.date(2027, 9, 22), self.DAYS), ("Happy 3rd anniversary, A & S", ""))
-        self.assertEqual(r.special_for(dt.date(2035, 9, 22), self.DAYS), ("Happy 11th anniversary, A & S", ""))
+        self.assertEqual(r.special_for(dt.date(2026, 9, 22), self.DAYS), ("Happy 2nd anniversary, A & S", "", "heart"))
+        self.assertEqual(r.special_for(dt.date(2027, 9, 22), self.DAYS)[0], "Happy 3rd anniversary, A & S")
+        self.assertEqual(r.special_for(dt.date(2035, 9, 22), self.DAYS)[0], "Happy 11th anniversary, A & S")
 
     def test_author_and_ordinary_days(self):
-        self.assertEqual(r.special_for(dt.date(2026, 12, 19), self.DAYS), ("Happy birthday!", "everyone"))
+        self.assertEqual(r.special_for(dt.date(2026, 12, 19), self.DAYS), ("Happy birthday!", "everyone", ""))
         self.assertIsNone(r.special_for(dt.date(2026, 9, 21), self.DAYS))
         self.assertIsNone(r.special_for(dt.date(2026, 9, 22), None))
 
     def test_special_day_replaces_quote_in_build(self):
         cfg = {"timezone": TZ, "people": PEOPLE, "special_days": self.DAYS}
-        self.assertEqual(r.build(dt.date(2026, 12, 19), [], cfg)["quote"], ("Happy birthday!", "everyone"))
+        data = r.build(dt.date(2026, 12, 19), [], cfg)
+        self.assertEqual((data["quote"], data["special"], data["icon"]), (("Happy birthday!", "everyone"), True, ""))
+        data = r.build(dt.date(2026, 9, 22), [], cfg)
+        self.assertEqual(data["icon"], "heart")
+        img = r.render(data, fonts_dir="/nonexistent")
+        self.assertEqual(img.size, (800, 480))
+        self.assertEqual(r.build(dt.date(2026, 9, 21), [], cfg)["special"], False)
 
 
 if __name__ == "__main__":

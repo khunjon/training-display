@@ -293,8 +293,16 @@ def special_for(day: dt.date, special_days: list[dict] | None) -> tuple[str, str
         if sd.get("since"):
             n = day.year - int(sd["since"])
             text = text.replace("{nth}", _ordinal(n)).replace("{n}", str(n))
-        return (text, sd.get("author", ""))
+        return (text, sd.get("author", ""), sd.get("icon", ""))
     return None
+
+
+def _draw_heart(d, x: int, y: int, size: int, fill=0):
+    """A solid heart with its bounding box's top-left at (x, y): two lobes and a point."""
+    r = size / 4
+    d.ellipse([x, y, x + 2 * r, y + 2 * r], fill=fill)
+    d.ellipse([x + 2 * r, y, x + 4 * r, y + 2 * r], fill=fill)
+    d.polygon([(x, y + r), (x + 4 * r, y + r), (x + 2 * r, y + size)], fill=fill)
 
 
 def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None = None) -> dict:
@@ -311,8 +319,9 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
         "date_label": day.strftime("%a %d %b").upper(),
         "race": race_countdown(day, _p(cfg.get("goals_dir"))),
         "rows": rows,
-        "quote": special or quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
+        "quote": special[:2] if special else quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
         "special": special is not None,  # a message, not a quotation: drawn without quote marks
+        "icon": special[2] if special else "",  # "heart" draws one beside the message
         "updated": (now or dt.datetime.now(tz)).strftime("%H:%M"),
     }
 
@@ -414,19 +423,23 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
     q = data.get("quote")
     if q:
         text, author = q
+        qx = M
+        if data.get("icon") == "heart":
+            _draw_heart(d, M, qy + 22, 36)
+            qx = M + 52
         size = 34
         while True:
             f = cond_semi(size)
-            lines = _wrap(d, text if data.get("special") else f"“{text}”", f, W - 2 * M)
+            lines = _wrap(d, text if data.get("special") else f"“{text}”", f, W - M - qx)
             if len(lines) <= 2 or size <= 22:
                 break
             size -= 2
         ly = qy + 18
         for ln in lines[:2]:
-            d.text((M, ly), ln, font=f, fill=0)
+            d.text((qx, ly), ln, font=f, fill=0)
             ly += int(size * 1.15)
         if author:
-            d.text((M, ly + 4), f"— {author}", font=mono(18), fill=0)
+            d.text((qx, ly + 4), f"— {author}", font=mono(18), fill=0)
 
     # --- footer
     upd = f"updated {data['updated']}"
