@@ -274,9 +274,33 @@ def quote_for(day: dt.date, quotes: list[tuple[str, str]]) -> tuple[str, str] | 
     return quotes[day.toordinal() % len(quotes)]
 
 
+def _ordinal(n: int) -> str:
+    suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def special_for(day: dt.date, special_days: list[dict] | None) -> tuple[str, str] | None:
+    """A message that replaces the quote on a special date.
+
+    Config entries: {"date": "MM-DD", "text": "...", "author": "...", "since": 2024}.
+    In `text`, `{n}` is the years since `since` (e.g. "Happy {nth} anniversary" -> "2nd").
+    `author` is optional and drawn like a quote's attribution.
+    """
+    for sd in special_days or []:
+        if sd.get("date") != day.strftime("%m-%d"):
+            continue
+        text = sd.get("text", "")
+        if sd.get("since"):
+            n = day.year - int(sd["since"])
+            text = text.replace("{nth}", _ordinal(n)).replace("{n}", str(n))
+        return (text, sd.get("author", ""))
+    return None
+
+
 def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None = None) -> dict:
     tz = ZoneInfo(cfg["timezone"])
     sessions = resolve(events, day, cfg["people"], tz)
+    special = special_for(day, cfg.get("special_days"))
     rows = []
     for p in cfg["people"]:
         log = _p(p.get("activity_log"))
@@ -287,7 +311,8 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
         "date_label": day.strftime("%a %d %b").upper(),
         "race": race_countdown(day, _p(cfg.get("goals_dir"))),
         "rows": rows,
-        "quote": quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
+        "quote": special or quote_for(day, load_quotes(_p(cfg.get("quotes_file")))),
+        "special": special is not None,  # a message, not a quotation: drawn without quote marks
         "updated": (now or dt.datetime.now(tz)).strftime("%H:%M"),
     }
 
@@ -392,7 +417,7 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
         size = 34
         while True:
             f = cond_semi(size)
-            lines = _wrap(d, f"“{text}”", f, W - 2 * M)
+            lines = _wrap(d, text if data.get("special") else f"“{text}”", f, W - 2 * M)
             if len(lines) <= 2 or size <= 22:
                 break
             size -= 2

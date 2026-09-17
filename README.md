@@ -98,6 +98,9 @@ words like *run, threshold, tempo, intervals, long run* → run; *strength, gym*
   moving_time, location`. `type` of `run` or `weight_training` matches run/strength sessions.
 - **Quotes:** a Markdown file; every line starting `- ` is a quote, ideally `- "text" — author`.
   One per day, rotating.
+- **Special days:** `special_days` in the config replaces the quote on a date: `{"date": "MM-DD",
+  "text": "...", "author": "...", "since": 2024}`. `{n}` / `{nth}` in the text become the years
+  since `since` ("2" / "2nd"); `author` is optional.
 
 ## Tests
 
