@@ -22,7 +22,7 @@ A living-room e-paper screen answering "what are we training today?" — see `RE
 
 0. Shared calendar + service account — done. **Still open:** `push.py`, a CLI the vault's plan-changing skills call to write a session (title, date, optional time/location; default slots come from config).
 1. `render.py` — done, tested.
-2. `server.py` — LAN-only, port 8787: `/today.png`, `/today.json`, `/` (phone page), and the TRMNL protocol `/api/setup` + `/api/display` (`{image_url, refresh_rate}`); plus a launchd plist (`com.jon.training-display`, 06:00 then hourly to 21:00) that runs `render.py`, wrapped so a failure is loud.
+2. `server.py` — done, tested. Stdlib, port 8787: `/today.png`, `/today.json`, `/health`, `/` (phone page), and the TRMNL protocol `/api/setup`, `/api/display` (`filename` = hash of the PNG, so the device only redraws on change), `/api/log`. `scripts/install_launchd.sh` generates and loads two agents: `<prefix>.training-display` (render, 06:00 then hourly to 21:00, RunAtLoad, optionally wrapped by `--guard`) and `<prefix>.training-display-server` (KeepAlive). Logs in `~/Library/Logs/training-display*.log`. Protocol details were read from the firmware source (`lib/trmnl/src/parse_response_api_display.cpp`, `request_headers.cpp`).
 3. Flash the TRMNL firmware on the Seeed × TRMNL 7.5" kit, point it at the server, hang it.
 
 ## Conventions

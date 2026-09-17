@@ -69,7 +69,20 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
 4. **Python.** `python3 -m venv venv && venv/bin/pip install -r requirements.txt`
 5. **Render.** `venv/bin/python render.py` → `today.png`. Try `--date 2026-09-21`, or
    `--fixture fixtures/sample-events.json` to render without a calendar.
-6. **Serve + schedule.** *(phase 2 — coming)*
+6. **Serve.** `venv/bin/python server.py` binds `0.0.0.0:8787` (LAN only — put it behind nothing
+   that forwards from the internet). Routes: `/` (phone page), `/today.png`, `/today.json`, `/health`,
+   and the TRMNL protocol `/api/setup`, `/api/display`, `/api/log`. An optional `"server"` block in
+   the config sets `bind`, `port`, `refresh_rate` (device sleep, seconds) and `image_url` (only if the
+   device cannot reuse the host it reached you on, e.g. behind a proxy).
+7. **Schedule (macOS).** `scripts/install_launchd.sh` installs two launchd agents: the renderer at
+   06:00 then hourly to 21:00 (and on load), and the server kept alive. `--guard path/to/wrapper.sh`
+   wraps the render job in your own notify-on-failure script; `--uninstall` removes both.
+   On Linux, a cron line for `render.py` and a systemd unit for `server.py` do the same.
+8. **Device.** Flash the [TRMNL firmware](https://github.com/usetrmnl/firmware), and in its captive
+   portal set the server to `http://<your-computer-ip>:8787`. The device calls `/api/setup` once,
+   then `/api/display` every `refresh_rate` seconds; it only redraws when the `filename` (a hash of
+   the PNG) changes. Use a fixed IP or DHCP reservation rather than `.local` — mDNS on the ESP32 is
+   not reliable on every router.
 
 ## Session vocabulary
 
