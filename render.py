@@ -3,6 +3,7 @@
 
 One question, one screen: "what are we training today?" — each person's session
 with a time and place, a countdown to the next race, and a quote for the day.
+Days we train together are drawn as one outing rather than a row each.
 
 Sources (all optional except the calendar)
   - a shared Google Calendar, read with a service account
@@ -37,6 +38,25 @@ W, H = 800, 480
 RUN_WORDS = ("run", "threshold", "tempo", "intervals", "fartlek", "strides", "race")
 STRENGTH_WORDS = ("strength", "gym", "lift")
 REST_WORDS = ("rest", "mobility", "off")
+
+TOGETHER_TAGS = {"together", "us", "both"}
+APART_TAGS = {"apart", "solo", "separate"}
+TOGETHER_WINDOW_MIN = 30  # two sessions starting this close, in the same place, are one outing
+
+# Neither display face has a single symbol glyph — not even ♥ — so an emoji anyone types
+# into the calendar comes out as a .notdef box. Noto Emoji is monochrome and draws them.
+EMOJI_FONT = "NotoEmoji-Regular.ttf"
+# Sequence glue we cannot lay out without libraqm: a variation selector, a skin tone, a
+# keycap, or a ZWJ and what it joins would each land as its own glyph. Keep the first
+# character of a sequence and drop the rest, so 🏋️‍♀️ draws as 🏋 rather than three pictures.
+EMOJI_GLUE = re.compile("‍.|[︎️⃣\U0001F3FB-\U0001F3FF]", re.S)
+# Noto draws the coloured hearts as hatching and stipple, standing in for a colour this
+# screen does not have — at 24 px that is a smudge. The heart *suit* is a solid shape, so
+# every heart becomes one and looks like a heart. Nothing else needs this: the outline
+# star and the ticks hold up fine, and there is no solid star in the font to swap to.
+EMOJI_SOLID = {c: "♥" for c in "❤♡❣\U0001F5A4\U0001F90D\U0001F90E"
+               "\U0001F493\U0001F494\U0001F495\U0001F496\U0001F497\U0001F498\U0001F499"
+               "\U0001F49A\U0001F49B\U0001F49C\U0001F49D\U0001F49F"}
 
 
 # ---------------------------------------------------------------- config
@@ -120,42 +140,74 @@ def _sort_key(ev: dict) -> str:
     return st.get("dateTime") or (st.get("date", "") + "T00:00:00")
 
 
+def _strip_tags(text: str) -> tuple[str, set[str]]:
+    """Pull trailing `#tags` off a line: 'Long run #together' -> ('Long run', {'together'})."""
+    tags = set()
+    while (m := re.search(r"\s+#([\w-]+)$", text)):
+        tags.add(m.group(1).lower())
+        text = text[: m.start()]
+    return text.strip(), tags
+
+
 def resolve(events: list[dict], day: dt.date, people: list[dict], tz: ZoneInfo | str = "UTC") -> dict[str, dict | None]:
     """One row per person: {name: session | None}.
 
     Who: an event created by one of a person's emails is theirs; a `Name:` title prefix
     overrides; anything else belongs to the first person in `people`.
+    An event titled for everyone — `Alex + Sam:`, `Us:`, `Both:`, `Together:`, or any
+    title tagged `#together` — belongs to all of them and is flagged as a shared outing;
+    `#apart` flags the opposite, for a day that only looks shared. Tags never show.
     If someone has several events, the earliest timed one wins (an all-day 'Rest'
     loses to a real session).
     """
     tz = ZoneInfo(tz) if isinstance(tz, str) else tz
     names = [p["name"] for p in people]
     by_email = {e: p["name"] for p in people for e in p["emails"]}
-    prefix = re.compile(r"^\s*(" + "|".join(re.escape(n) for n in names) + r")\s*[:\-–·]\s*(.+)$", re.I)
-    rows: dict[str, list[dict]] = {n: [] for n in names}
+    alt = "|".join(re.escape(n) for n in names)
+    prefix = re.compile(r"^\s*(" + alt + r")\s*[:\-–·]\s*(.+)$", re.I)
+    group = re.compile(
+        r"^\s*(?:(?:" + alt + r")(?:\s*(?:\+|&|/|,|and)\s*(?:" + alt + r"))+|us|both|together)\s*[:\-–·]\s*(.+)$", re.I
+    )
+    parsed: list[tuple[str, dict]] = []
 
     for ev in sorted(events, key=_sort_key):
         if ev.get("status") == "cancelled":
             continue
-        title = (ev.get("summary") or "").strip()
+        title, tags = _strip_tags((ev.get("summary") or "").strip())
         if not title:
             continue
-        who = names[0]
-        m = prefix.match(title)
-        if m:
-            who = next(n for n in names if n.lower() == m.group(1).lower())
+        shared = None
+        if (m := group.match(title)):
+            title, shared = m.group(1).strip(), True
+            who = by_email.get((ev.get("creator") or {}).get("email", "").lower(), names[0])
+        elif (m := prefix.match(title)):
             title = m.group(2).strip()
+            who = next(n for n in names if n.lower() == m.group(1).lower())
         else:
-            who = by_email.get((ev.get("creator") or {}).get("email", "").lower(), who)
-        rows[who].append(
-            {
-                "label": title.upper(),
-                "kind": classify(title),
-                "time": _fmt_time(ev, day, tz),
-                "place": (ev.get("location") or "").strip(),
-                "all_day": "date" in ev.get("start", {}),
-            }
-        )
+            who = by_email.get((ev.get("creator") or {}).get("email", "").lower(), names[0])
+        if tags & TOGETHER_TAGS:
+            shared = True
+        elif tags & APART_TAGS:
+            shared = False
+        parsed.append((who, {
+            "label": title.upper(),
+            "kind": classify(title),
+            "time": _fmt_time(ev, day, tz),
+            "place": (ev.get("location") or "").strip(),
+            "all_day": "date" in ev.get("start", {}),
+            "together": shared,
+        }))
+
+    # a shared event stands in for anyone who did not write one of their own: one
+    # `Us: Long run` covers us both, but if we each entered our own we each keep it
+    spoke = {who for who, sess in parsed if sess["together"]}
+    rows: dict[str, list[dict]] = {n: [] for n in names}
+    for who, sess in parsed:
+        rows[who].append(sess)
+        if sess["together"]:
+            for n in names:
+                if n != who and n not in spoke:
+                    rows[n].append(dict(sess))
 
     def pick(lst: list[dict]) -> dict | None:
         if not lst:
@@ -164,6 +216,50 @@ def resolve(events: list[dict], day: dt.date, people: list[dict], tz: ZoneInfo |
         return (timed or lst)[0]
 
     return {n: pick(rows[n]) for n in names}
+
+
+def _start_min(sess: dict) -> int | None:
+    m = re.match(r"(\d{1,2}):(\d{2})", sess.get("time") or "")
+    return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+
+
+def _norm_place(place: str) -> str:
+    return " ".join(re.sub(r"[^\w\s]", " ", (place or "").lower()).split())
+
+
+def togetherness(sessions: list[dict | None], window_min: int = TOGETHER_WINDOW_MIN) -> dict | None:
+    """The shared time and place when today is one outing rather than two, else None.
+
+    Two ways to be together. Either every session says so — a `#together` tag or an
+    `Alex + Sam:` title — or they are plainly the same trip out of the house: same
+    place, starts within `window_min` of each other, whatever the work each person
+    does when they get there. `#apart` on any of them settles it the other way, and
+    `window_min` of 0 drops the inference and leaves only the explicit marker.
+
+    `same` says both are doing the identical session, so the display can collapse
+    the two rows into one label.
+    """
+    if len(sessions) < 2 or not all(sessions):
+        return None
+    if any(s["together"] is False for s in sessions):
+        return None
+    starts = [_start_min(s) for s in sessions]
+    if not all(s["together"] for s in sessions):  # not marked: infer from place and time
+        places = {_norm_place(s["place"]) for s in sessions}
+        if not window_min or len(places) != 1 or not places.pop():
+            return None
+        if any(t is None for t in starts) or max(starts) - min(starts) > window_min:
+            return None
+    lead = sessions[starts.index(min(starts))] if all(t is not None for t in starts) else sessions[0]
+    labels = {s["label"] for s in sessions}
+    same = len(labels) == 1
+    return {
+        # one time for the outing: the shared one if it is shared, else when the first of us starts
+        "time": lead["time"] if len({s["time"] for s in sessions}) == 1 else (lead["time"] or "").split("–")[0],
+        "place": next((s["place"] for s in sessions if s["place"]), ""),
+        "same": same,
+        "label": next(iter(labels)) if same else "",
+    }
 
 
 def _log_rows(day: dt.date, log_path: Path | None):
@@ -212,7 +308,8 @@ def logged_session(day: dt.date, log_path: Path | None) -> dict | None:
         if not kind:
             continue
         name = re.split(r"\s+[—–-]\s+", row.get("name") or "", 1)[0].strip() or kind
-        return {"label": name.upper(), "kind": kind, "time": "", "place": row.get("location", "").strip(), "all_day": False}
+        return {"label": name.upper(), "kind": kind, "time": "", "place": row.get("location", "").strip(),
+                "all_day": False, "together": None}
     return None
 
 
@@ -264,11 +361,7 @@ def load_quotes(path: Path | None) -> list[tuple[str, str, set[str]]]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.startswith("- "):
             continue
-        body = line[2:].strip()
-        tags = set()
-        while (m := re.search(r"\s+#([\w-]+)$", body)):
-            tags.add(m.group(1).lower())
-            body = body[: m.start()]
+        body, tags = _strip_tags(line[2:].strip())
         m = re.match(r'^[“"](.+?)[”"]\s*[—–-]\s*(.+)$', body)
         text, author = (m.group(1).strip(), m.group(2).strip()) if m else (body.strip('"“”'), "")
         out.append((text, author, tags))
@@ -349,11 +442,16 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
         rows.append({"name": p["name"], "session": sess, "done": done_state(day, sess["kind"], log) if sess else None})
     first = rows[0]["session"] if rows else None
     first_kind = first["kind"] if first else None
+    together = togetherness([r["session"] for r in rows], int(cfg.get("together_window_min", TOGETHER_WINDOW_MIN) or 0))
+    if together:
+        # one label for everyone only if there is one thing to say about the doing of it too
+        together["collapse"] = together["same"] and len({bool(r["done"]) for r in rows}) == 1
     return {
         "date": day.isoformat(),
         "date_label": day.strftime("%a %d %b").upper(),
         "race": race_countdown(day, _p(cfg.get("goals_dir"))),
         "rows": rows,
+        "together": together,
         "quote": special[:2] if special else quote_for(day, load_quotes(_p(cfg.get("quotes_file"))), kind=first_kind),
         "special": special is not None,  # a message, not a quotation: drawn without quote marks
         "icon": special[2] if special else "",  # "heart" or "cake", drawn beside the message
@@ -364,22 +462,69 @@ def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None =
 # ---------------------------------------------------------------- render
 
 def _font_loader(fonts_dir: Path):
+    """Cached, because `fit` walks a dozen sizes and every face is asked for repeatedly —
+    and because callers use the font object's identity to cache what it can draw."""
     from PIL import ImageFont
 
+    loaded: dict[tuple[str, int], object] = {}
+
     def font(name: str, size: int):
-        try:
-            return ImageFont.truetype(str(fonts_dir / name), size)
-        except OSError:
-            return ImageFont.load_default()
+        if (name, size) not in loaded:
+            try:
+                loaded[(name, size)] = ImageFont.truetype(str(fonts_dir / name), size)
+            except OSError:
+                loaded[(name, size)] = ImageFont.load_default()
+        return loaded[(name, size)]
 
     return font
 
 
-def _wrap(draw, text: str, font, max_w: int) -> list[str]:
+def _font_key(font) -> tuple:
+    """Identify a font by what it is, not by `id()` — Pillow font objects are short-lived
+    and a freed id gets handed to the next one, which would poison a glyph cache."""
+    return (getattr(font, "path", ""), getattr(font, "size", 0))
+
+
+def _has_glyph(font, ch: str, cache: dict) -> bool:
+    """FreeType draws a missing character as .notdef, so compare it against one no font has."""
+    fk = _font_key(font)
+    if (fk, ch) not in cache:
+        miss = cache.setdefault((fk, None), (font.getbbox(""), font.getlength("")))
+        cache[(fk, ch)] = (font.getbbox(ch), font.getlength(ch)) != miss
+    return cache[(fk, ch)]
+
+
+def _runs(text: str, font, emoji, cache: dict) -> list[tuple[str, object, bool]]:
+    """Split a string into (run, font, is_emoji) pieces, each drawn by a font that has it.
+
+    Below U+2000 is ordinary text and never probed. Above it, the text face is asked
+    first — it does own the dashes, the curly quotes and a tick — then the emoji face.
+    A character neither one has is dropped: a gap reads better on a wall than a box.
+    """
+    out: list[list] = []
+    for ch in EMOJI_GLUE.sub("", text):
+        ch = EMOJI_SOLID.get(ch, ch)
+        if ord(ch) < 0x2000 or _has_glyph(font, ch, cache):
+            f, is_emoji = font, False
+        elif emoji is not None and _has_glyph(emoji, ch, cache):
+            f, is_emoji = emoji, True
+        else:
+            continue
+        if out and out[-1][1] is f:
+            out[-1][0] += ch
+        else:
+            out.append([ch, f, is_emoji])
+    if out:  # a dropped emoji must not leave the line hanging off its margin
+        out[0][0] = out[0][0].lstrip()
+        out[-1][0] = out[-1][0].rstrip()
+    return [(run, f, e) for run, f, e in out if run]
+
+
+def _wrap(text: str, tlen, font, max_w: int) -> list[str]:
     lines, cur = [], ""
     for w in text.split():
         t = (cur + " " + w).strip()
-        if draw.textlength(t, font=font) <= max_w:
+        if tlen(t, font) <= max_w:
             cur = t
         else:
             lines.append(cur)
@@ -392,30 +537,50 @@ def _wrap(draw, text: str, font, max_w: int) -> list[str]:
 def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/fonts"):
     from PIL import Image, ImageDraw
 
-    font = _font_loader(Path(fonts_dir).expanduser())
+    fonts = Path(fonts_dir).expanduser()
+    font = _font_loader(fonts)
     mono = lambda s: font("IBMPlexMono-Medium.ttf", s)  # noqa: E731
     mono_b = lambda s: font("IBMPlexMono-Bold.ttf", s)  # noqa: E731
     cond = lambda s: font("BarlowCondensed-Bold.ttf", s)  # noqa: E731
     cond_semi = lambda s: font("BarlowCondensed-SemiBold.ttf", s)  # noqa: E731
+    # no emoji face installed -> `emoji_for` gives None and emoji are dropped, never boxed
+    has_emoji = (fonts / EMOJI_FONT).is_file()
 
     img = Image.new("L", (W, H), 255)
     d = ImageDraw.Draw(img)
     M = 28
 
+    glyphs: dict = {}
+
+    def emoji_for(f):
+        """An emoji face sized to sit with `f`: 0.8×, since these faces run tall next to caps."""
+        return font(EMOJI_FONT, max(10, round(getattr(f, "size", 20) * 0.8))) if has_emoji else None
+
+    def tlen(text, f) -> float:
+        return sum(d.textlength(run, font=rf) for run, rf, _ in _runs(text, f, emoji_for(f), glyphs))
+
+    def dtext(xy, text, f, fill=0):
+        """Draw a string that may mix text and emoji, one run per font."""
+        x0, y0 = xy
+        drop = round(getattr(f, "size", 20) * 0.1)  # emoji sit high against cap height; nudge them down
+        for run, rf, is_emoji in _runs(text, f, emoji_for(f), glyphs):
+            d.text((x0, y0 + drop if is_emoji else y0), run, font=rf, fill=fill)
+            x0 += d.textlength(run, font=rf)
+
     def fit(text, mk, max_w, start, floor):
         size = start
-        while size > floor and d.textlength(text, font=mk(size)) > max_w:
+        while size > floor and tlen(text, mk(size)) > max_w:
             size -= 2
         return mk(size), size
 
     # --- top strip
     y = M
-    d.text((M, y), data["date_label"], font=mono(26), fill=0)
+    dtext((M, y), data["date_label"], mono(26), 0)
     if data.get("race"):
         r = data["race"]
         txt = f"{r['days']} DAYS TO {r['name'].upper()}"
         f, size = fit(txt, mono, W - 2 * M - 220, 26, 18)
-        d.text((W - M - d.textlength(txt, font=f), y + (26 - size) // 2), txt, font=f, fill=0)
+        dtext((W - M - tlen(txt, f), y + (26 - size) // 2), txt, f, 0)
     y += 44
     d.line([(M, y), (W - M, y)], fill=0, width=3)
 
@@ -423,34 +588,78 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
     rows = data.get("rows") or []
     n = max(len(rows), 1)
     area_top, area_h = y + 26, 244
-    row_h = area_h // n
     x = M + 110
-    for i, row in enumerate(rows):
-        y0 = area_top + i * row_h
-        d.text((M, y0 + 6), row["name"].upper(), font=mono(20), fill=0)
-        sess, done = row.get("session"), row.get("done")
-        if not sess:
-            if i == 0:
-                d.text((x, y0 - 4), "NO PLAN YET", font=cond_semi(48), fill=0)
-            else:
-                d.line([(x, y0 + 22), (x + 44, y0 + 22)], fill=0, width=5)
-        else:
-            right_limit = W - M - (170 if done else 0)
-            f, _ = fit(sess["label"], cond, right_limit - x, 64, 36)
-            d.text((x, y0 - 8), sess["label"], font=f, fill=0)
-            parts = [p for p in (sess["time"] or ("ALL DAY" if sess["all_day"] else ""), sess["place"]) if p]
-            if parts:
-                d.text((x, y0 + 64), "  ·  ".join(parts), font=mono(24), fill=0)
+
+    def done_badge(text: str, top: int):
+        bw, bh = 150, 44
+        bx = W - M - bw
+        d.rounded_rectangle([bx, top, bx + bw, top + bh], radius=8, fill=0)
+        f2, _ = fit("DONE", mono_b, bw - 16, 24, 16)
+        dtext((bx + (bw - tlen("DONE", f2)) / 2, top + 8), "DONE", f2, 255)
+        f3, _ = fit(text, mono, 220, 20, 14)
+        dtext((W - M - tlen(text, f3), top + bh + 8), text, f3, 0)
+
+    tg = data.get("together") if len(rows) > 1 else None
+    if tg:
+        # one band for the outing we share, then what each of us does once we are there
+        fp = mono_b(20)
+        pw = tlen("TOGETHER", fp) + 26
+        d.rounded_rectangle([M, area_top, M + pw, area_top + 34], radius=8, fill=0)
+        dtext((M + 13, area_top + 7), "TOGETHER", fp, 255)
+        meta = "  ·  ".join(p for p in (tg.get("time"), tg.get("place")) if p)
+        if meta:
+            f, _ = fit(meta, mono, W - 2 * M - pw - 20, 24, 16)
+            dtext((M + pw + 20, area_top + 8), meta, f, 0)
+
+    if tg and tg.get("collapse"):  # both doing the same thing: one label, both names under it
+        label = tg["label"]
+        f, size = fit(label, cond, W - 2 * M, 80, 32)
+        dtext((max(M, (W - tlen(label, f)) / 2), area_top + 52), label, f, 0)
+        names = "  ·  ".join(row["name"].upper() for row in rows)
+        fn = mono(22)
+        dtext(((W - tlen(names, fn)) / 2, area_top + 62 + int(size * 1.1)), names, fn, 0)
+        done = next((row["done"] for row in rows if row.get("done")), None)
+        if done:
+            t = f"DONE  ·  {done}"
+            fd, _ = fit(t, mono_b, W - 2 * M, 20, 14)
+            dtext(((W - tlen(t, fd)) / 2, area_top + 98 + int(size * 1.1)), t, fd, 0)
+    elif tg:  # together, but each with our own work: no divider, and the time and place said once
+        line_h = (area_h - 52) // n
+        for i, row in enumerate(rows):
+            y0 = area_top + 52 + i * line_h
+            dtext((M, y0 + 12), row["name"].upper(), mono(20), 0)
+            sess, done = row.get("session"), row.get("done")
+            if not sess:
+                continue
+            f, _ = fit(sess["label"], cond, W - M - (170 if done else 0) - x, 54, 32)
+            dtext((x, y0), sess["label"], f, 0)
             if done:
-                bw, bh = 150, 44
-                bx, by = W - M - bw, y0 + 4
-                d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=8, fill=0)
-                f2, _ = fit("DONE", mono_b, bw - 16, 24, 16)
-                d.text((bx + (bw - d.textlength("DONE", font=f2)) / 2, by + 8), "DONE", font=f2, fill=255)
-                f3, _ = fit(done, mono, 220, 20, 14)
-                d.text((W - M - d.textlength(done, font=f3), by + bh + 8), done, font=f3, fill=0)
-        if i < len(rows) - 1:
-            d.line([(x, y0 + row_h - 24), (W - M, y0 + row_h - 24)], fill=0, width=1)
+                done_badge(done, y0 + 4)
+    else:
+        row_h = area_h // n
+        for i, row in enumerate(rows):
+            y0 = area_top + i * row_h
+            dtext((M, y0 + 6), row["name"].upper(), mono(20), 0)
+            sess, done = row.get("session"), row.get("done")
+            if not sess:
+                if i == 0:
+                    dtext((x, y0 - 4), "NO PLAN YET", cond_semi(48), 0)
+                else:
+                    d.line([(x, y0 + 22), (x + 44, y0 + 22)], fill=0, width=5)
+            else:
+                right_limit = W - M - (170 if done else 0)
+                f, _ = fit(sess["label"], cond, right_limit - x, 64, 36)
+                dtext((x, y0 - 8), sess["label"], f, 0)
+                parts = [p for p in (sess["time"] or ("ALL DAY" if sess["all_day"] else ""), sess["place"]) if p]
+                if parts:
+                    meta = "  ·  ".join(parts)
+                    # stop short of the done column: a long place name used to run into it
+                    fm, _ = fit(meta, mono, W - M - x - (236 if done else 0), 24, 14)
+                    dtext((x, y0 + 64), meta, fm, 0)
+                if done:
+                    done_badge(done, y0 + 4)
+            if i < len(rows) - 1:
+                d.line([(x, y0 + row_h - 24), (W - M, y0 + row_h - 24)], fill=0, width=1)
 
     # --- quote
     qy = y + 270
@@ -465,21 +674,21 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
         size = 34
         while True:
             f = cond_semi(size)
-            lines = _wrap(d, text if data.get("special") else f"“{text}”", f, W - M - qx)
+            lines = _wrap(text if data.get("special") else f"“{text}”", tlen, f, W - M - qx)
             if len(lines) <= 2 or size <= 22:
                 break
             size -= 2
         ly = qy + 18
         for ln in lines[:2]:
-            d.text((qx, ly), ln, font=f, fill=0)
+            dtext((qx, ly), ln, f, 0)
             ly += int(size * 1.15)
         if author:
-            d.text((qx, ly + 4), f"— {author}", font=mono(18), fill=0)
+            dtext((qx, ly + 4), f"— {author}", mono(18), 0)
 
     # --- footer
     upd = f"updated {data['updated']}"
     f = mono(14)
-    d.text((W - M - d.textlength(upd, font=f), H - M + 6), upd, font=f, fill=0)
+    dtext((W - M - tlen(upd, f), H - M + 6), upd, f, 0)
 
     return img.convert("1", dither=Image.NONE)
 
@@ -522,6 +731,8 @@ def main(argv=None) -> int:
     (out / "today.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
     render(data, cfg["fonts_dir"]).save(out / "today.png")
     summary = "  ".join(f"{r['name']}={r['session'] and r['session']['label']}{' DONE' if r['done'] else ''}" for r in data["rows"])
+    if data.get("together"):
+        summary = f"[together] {summary}"
     print(f"{out / 'today.png'}  {summary}")
     return 0
 

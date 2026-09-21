@@ -79,7 +79,198 @@ class Resolve(unittest.TestCase):
 
     def test_single_person_config(self):
         rows = r.resolve([ev("Yoga", "19:00", "20:00", creator=PARTNER)], DAY, [{"name": "Solo", "emails": []}], TZ)
-        self.assertEqual(rows, {"Solo": {"label": "YOGA", "kind": "other", "time": "19:00–20:00", "place": "", "all_day": False}})
+        self.assertEqual(rows, {"Solo": {"label": "YOGA", "kind": "other", "time": "19:00–20:00", "place": "",
+                                         "all_day": False, "together": None}})
+
+
+class Together(unittest.TestCase):
+    """A shared outing: one band instead of two rows."""
+
+    def sessions(self, events):
+        rows = r.resolve(events, DAY, PEOPLE, TZ)
+        return [rows["Alex"], rows["Sam"]]
+
+    def test_tag_puts_one_event_on_both_rows(self):
+        rows = r.resolve([ev("Long run 14 km #together", "06:30", "08:30", location="Riverside Park")], DAY, PEOPLE, TZ)
+        self.assertEqual(rows["Alex"]["label"], "LONG RUN 14 KM")  # the tag never shows
+        self.assertEqual(rows["Sam"]["label"], "LONG RUN 14 KM")
+        self.assertTrue(rows["Alex"]["together"])
+        t = r.togetherness([rows["Alex"], rows["Sam"]])
+        self.assertEqual((t["time"], t["place"], t["same"], t["label"]), ("06:30–08:30", "Riverside Park", True, "LONG RUN 14 KM"))
+
+    def test_group_prefixes(self):
+        for title in ("Alex + Sam: Long run 14 km", "Alex & Sam: Long run 14 km", "Alex and Sam: Long run 14 km",
+                      "Us: Long run 14 km", "Both: Long run 14 km", "Together: Long run 14 km"):
+            rows = r.resolve([ev(title, "06:30", "08:30", location="Riverside Park")], DAY, PEOPLE, TZ)
+            self.assertEqual(rows["Sam"]["label"], "LONG RUN 14 KM", title)
+            self.assertIsNotNone(r.togetherness([rows["Alex"], rows["Sam"]]), title)
+
+    def test_marker_holds_with_no_place_and_different_sessions(self):
+        t = r.togetherness(self.sessions([
+            ev("Long run 14 km #together", "06:30", "08:30"),
+            ev("Sam: Easy run 6 km #together", "06:30", "07:30"),
+        ]))
+        self.assertEqual((t["same"], t["label"], t["place"]), (False, "", ""))
+
+    def test_inferred_from_same_place_and_close_start(self):
+        t = r.togetherness(self.sessions([
+            ev("Long run 14 km", "06:30", "08:30", location="Riverside Park"),
+            ev("Easy run 6 km", "06:45", "07:30", creator=PARTNER, location="riverside park "),
+        ]))
+        self.assertEqual((t["time"], t["place"], t["same"]), ("06:30", "Riverside Park", False))
+
+    def test_not_together(self):
+        apart = [
+            # different places
+            [ev("Threshold 3 × 10 min", "18:00", "19:30", location="Track"),
+             ev("Yoga", "19:00", "20:00", creator=PARTNER, location="Studio")],
+            # same place, too far apart in the day
+            [ev("Easy run 7 km", "06:30", "07:30", location="Track"),
+             ev("Yoga", "18:00", "19:00", creator=PARTNER, location="Track")],
+            # same time, but neither event says where
+            [ev("Strength · lower", "11:00", "12:00"),
+             ev("Pilates", "11:00", "12:00", creator=PARTNER)],
+            # would infer, but one of us called it off
+            [ev("Easy run 7 km", "06:30", "07:30", location="Track"),
+             ev("Yoga #apart", "06:30", "07:30", creator=PARTNER, location="Track")],
+            # only one of us has anything on
+            [ev("Long run 14 km", "06:30", "08:30", location="Riverside Park")],
+        ]
+        for events in apart:
+            self.assertIsNone(r.togetherness(self.sessions(events)), events[0]["summary"])
+
+    def test_window_of_zero_leaves_only_the_marker(self):
+        inferred = self.sessions([ev("Long run 14 km", "06:30", "08:30", location="Park"),
+                                  ev("Easy run 6 km", "06:45", "07:30", creator=PARTNER, location="Park")])
+        self.assertIsNone(r.togetherness(inferred, window_min=0))
+        marked = self.sessions([ev("Long run 14 km #together", "06:30", "08:30", location="Park")])
+        self.assertIsNotNone(r.togetherness(marked, window_min=0))
+
+    def test_needs_two_people(self):
+        rows = r.resolve([ev("Long run 14 km #together", "06:30", "08:30")], DAY, [{"name": "Solo", "emails": []}], TZ)
+        self.assertIsNone(r.togetherness([rows["Solo"]]))
+
+    def test_build_collapses_only_when_the_done_state_matches(self):
+        with tempfile.TemporaryDirectory() as t:
+            log = Path(t) / "log.csv"
+            log.write_text("date,type,name,distance_km,pace_min_km,avg_hr\n2026-09-18,run,Long,14.2,6:05,152\n")
+            events = [ev("Long run 14 km #together", "06:30", "08:30", location="Riverside Park")]
+            people = [{"name": "Alex", "emails": [ME], "activity_log": str(log)}, {"name": "Sam", "emails": [PARTNER]}]
+
+            data = r.build(DAY, events, {"timezone": TZ, "people": people})
+            self.assertEqual(data["together"]["same"], True)
+            self.assertEqual(data["together"]["collapse"], False)  # Alex logged it, Sam has not
+
+            both = [dict(p, activity_log=str(log)) for p in people]
+            self.assertTrue(r.build(DAY, events, {"timezone": TZ, "people": both})["together"]["collapse"])
+            neither = [{"name": p["name"], "emails": p["emails"]} for p in people]
+            self.assertTrue(r.build(DAY, events, {"timezone": TZ, "people": neither})["together"]["collapse"])
+
+    def test_window_is_configurable_and_absent_on_ordinary_days(self):
+        cfg = {"timezone": TZ, "people": PEOPLE}
+        events = [ev("Long run 14 km", "06:30", "08:30", location="Park"),
+                  ev("Easy run 6 km", "07:30", "08:30", creator=PARTNER, location="Park")]
+        self.assertIsNone(r.build(DAY, events, cfg)["together"])  # 60 min apart, default window is 30
+        self.assertIsNotNone(r.build(DAY, events, dict(cfg, together_window_min=90))["together"])
+        self.assertIsNone(r.build(DAY, [ev("Easy run 7 km", "18:00", "19:00")], cfg)["together"])
+
+    def test_renders_both_together_layouts(self):
+        base = {"date": str(DAY), "date_label": "SUN 21 SEP", "updated": "06:00",
+                "race": {"name": "City 10K", "days": 64, "date": "2026-11-29"},
+                "quote": ("Wherever you are, be all there.", "Jim Elliot")}
+        sess = lambda label: {"label": label, "kind": "run", "time": "06:30", "place": "Riverside Park",  # noqa: E731
+                              "all_day": False, "together": True}
+        cases = [
+            # collapsed: one label, both names under it
+            dict(base, rows=[{"name": "Alex", "session": sess("LONG RUN 14 KM"), "done": None},
+                             {"name": "Sam", "session": sess("LONG RUN 14 KM"), "done": None}],
+                 together={"time": "06:30", "place": "Riverside Park", "same": True, "label": "LONG RUN 14 KM", "collapse": True}),
+            # collapsed and done
+            dict(base, rows=[{"name": "Alex", "session": sess("LONG RUN 14 KM"), "done": "14.2 KM · 6:05 · HR 152"},
+                             {"name": "Sam", "session": sess("LONG RUN 14 KM"), "done": "14.2 KM · 6:05 · HR 152"}],
+                 together={"time": "06:30", "place": "Riverside Park", "same": True, "label": "LONG RUN 14 KM", "collapse": True}),
+            # same outing, our own work, one of us done
+            dict(base, rows=[{"name": "Alex", "session": sess("LONG RUN 14 KM"), "done": "14.2 KM · 6:05 · HR 152"},
+                             {"name": "Sam", "session": sess("EASY RUN 6 KM"), "done": None}],
+                 together={"time": "06:30", "place": "Riverside Park", "same": False, "label": "", "collapse": False}),
+            # a label long enough to have to shrink, and a band with nothing to say but the word
+            dict(base, rows=[{"name": "Alex", "session": sess("LONG RUN 22 KM WITH 4 × 8 MIN AT MARATHON PACE"), "done": None},
+                             {"name": "Sam", "session": sess("LONG RUN 22 KM WITH 4 × 8 MIN AT MARATHON PACE"), "done": None}],
+                 together={"time": "", "place": "", "same": True,
+                           "label": "LONG RUN 22 KM WITH 4 × 8 MIN AT MARATHON PACE", "collapse": True}),
+        ]
+        for c in cases:
+            img = r.render(c, fonts_dir="/nonexistent")
+            self.assertEqual((img.mode, img.size), ("1", (800, 480)))
+
+
+class Emoji(unittest.TestCase):
+    """Neither display face owns a symbol glyph, so anything Sam types has to fall back."""
+
+    FONTS = Path("~/.local/state/training-display/fonts").expanduser()
+
+    def font(self, name="BarlowCondensed-Bold.ttf", size=40):
+        from PIL import ImageFont
+
+        p = self.FONTS / name
+        if not p.is_file():
+            self.skipTest(f"{name} not installed — run scripts/fetch_fonts.sh")
+        return ImageFont.truetype(str(p), size)
+
+    def runs(self, text, with_emoji=True):
+        text_font = self.font()
+        emoji = self.font(r.EMOJI_FONT) if with_emoji else None
+        if with_emoji and emoji is None:
+            self.skipTest("no emoji font")
+        return [(run, e) for run, _f, e in r._runs(text, text_font, emoji, {})]
+
+    def test_glue_is_stripped_to_one_picture(self):
+        for text, want in [
+            ("❤️", "♥"),          # variation selector dropped, heart made solid
+            ("\U0001F44D\U0001F3FD", "\U0001F44D"),  # skin tone dropped
+            ("\U0001F3CB️‍♀️", "\U0001F3CB"),  # ZWJ sequence -> its first part
+            ("1️⃣", "1"),              # keycap -> the digit
+        ]:
+            self.assertEqual("".join(run for run, _ in self.runs(text)), want, repr(text))
+
+    def test_text_keeps_what_the_text_face_owns(self):
+        # dashes, curly quotes and the bullet are ordinary text, not emoji
+        self.assertEqual(self.runs("“Easy run 7–8 km” · ok"), [("“Easy run 7–8 km” · ok", False)])
+
+    def test_emoji_run_is_split_out(self):
+        self.assertEqual(self.runs("LONG RUN \U0001F525 TODAY"),
+                         [("LONG RUN ", False), ("\U0001F525", True), (" TODAY", False)])
+
+    def test_dropped_when_no_emoji_face(self):
+        # no tofu, and no margin-wrecking space left where the picture was
+        self.assertEqual(self.runs("\U0001F3CB PILATES \U0001F525", with_emoji=False), [("PILATES", False)])
+        self.assertEqual(self.runs("\U0001F525", with_emoji=False), [])
+
+    def test_glyph_cache_is_keyed_on_the_face_not_the_object(self):
+        """`fit` builds and drops a font per size, so ids get recycled. Keyed on id(),
+        the cache hands one face's answers to the next object at that address and the
+        emoji comes out as .notdef — which is exactly what shipped to the wall once."""
+        a, b = self.font(), self.font()
+        self.assertIsNot(a, b)
+        self.assertEqual(r._font_key(a), r._font_key(b))  # same face, same answers
+        self.assertNotEqual(r._font_key(a), r._font_key(self.font(r.EMOJI_FONT)))
+        self.assertNotEqual(r._font_key(a), r._font_key(self.font(size=20)))
+        cache = {}
+        self.assertTrue(r._has_glyph(self.font(r.EMOJI_FONT), "\U0001F525", cache))
+        self.assertFalse(r._has_glyph(self.font(), "\U0001F525", cache))
+
+    def test_renders_a_frame_with_emoji_everywhere(self):
+        sess = {"label": "LONG RUN 14 KM \U0001F525", "kind": "run", "time": "06:30",
+                "place": "Riverside Park ❤️", "all_day": False, "together": None}
+        data = {"date": str(DAY), "date_label": "SUN 27 SEP", "updated": "06:00",
+                "race": {"name": "City 10K \U0001F3C3", "days": 63, "date": "2026-11-29"},
+                "quote": ("Wherever you are, be all there. ✨", "Jim Elliot"),
+                "rows": [{"name": "Alex", "session": sess, "done": "14.2 KM · 6:05 · HR 152"},
+                         {"name": "Sam", "session": None, "done": None}],
+                "together": None}
+        for fonts in (self.FONTS, "/nonexistent"):
+            img = r.render(data, fonts_dir=fonts)
+            self.assertEqual((img.mode, img.size), ("1", (800, 480)))
 
 
 class ActivityLog(unittest.TestCase):

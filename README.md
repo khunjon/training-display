@@ -41,6 +41,8 @@ quotes.md                 ┘        │            (launchd/cron: hourly)
   time (the thing the other person actually needs), and anyone can write to it from a phone.
 - **Who is who:** an event created by one of a person's emails is theirs; a `Name:` title prefix
   overrides; everything else belongs to the first person in the config.
+- **Some days are one outing, not two rows.** When you're going together the screen says so once,
+  above whatever each of you is actually doing when you get there.
 - **Done state comes from a local activity log**, never from writing back to the calendar. If
   something was logged that wasn't planned, the log wins and it still shows as done.
 - **LAN only.** Nothing leaves the house; health data stays local.
@@ -65,7 +67,8 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
 2. **Config.** Copy `config.example.json` to `~/.config/training-display/config.json` and edit.
    Everything except `calendar_id` and `people` is optional — leave out `goals_dir`, `activity_log`
    or `quotes_file` and that zone is simply not drawn.
-3. **Fonts.** `scripts/fetch_fonts.sh` downloads Barlow Condensed and IBM Plex Mono (OFL) into `fonts_dir`.
+3. **Fonts.** `scripts/fetch_fonts.sh` downloads Barlow Condensed, IBM Plex Mono and Noto Emoji
+   (all OFL) into `fonts_dir`. Noto Emoji is optional — see *Emoji* below.
 4. **Python.** `python3 -m venv venv && venv/bin/pip install -r requirements.txt`
 5. **Render.** `venv/bin/python render.py` → `today.png`. Try `--date 2026-09-21`, or
    `--fixture fixtures/sample-events.json` to render without a calendar.
@@ -90,6 +93,51 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
 Titles are free text, but the renderer classifies them so it knows which log rows count as "done":
 words like *run, threshold, tempo, intervals, long run* → run; *strength, gym* → strength;
 *rest, mobility* → rest; anything else (yoga, pilates, pickleball) → other.
+
+## Together days
+
+Sunday's long run is one trip to the park, not two independent sessions, so the screen draws it as
+one. Two ways to say so:
+
+- **Mark it.** Tag any title `#together` (the tag never shows), or title one event for everyone:
+  `Alex + Sam:`, `Alex and Sam:`, `Us:`, `Both:`, `Together:`. A single marked event covers everyone
+  who didn't enter something of their own — but if you each entered your own session, you each keep
+  it, and the day is still together.
+- **Or don't.** Two sessions in the same place starting within `together_window_min` minutes
+  (default 30) are taken as the same outing. Set it to `0` to switch the guess off and rely only on
+  the marker. `#apart` on either event settles it the other way, for a day that only looks shared.
+
+The band carries the time and place once. If you're both doing the identical session it collapses
+to one label with both names under it; if you're doing your own thing — or one of you has finished
+and the other hasn't — each of you keeps a line.
+
+```
+SUN 27 SEP                             63 DAYS TO THE CITY 10K
+───────────────────────────────────────────────────────────────
+[TOGETHER]  06:30  ·  Riverside Park
+ALEX    LONG RUN 14 KM                                   [DONE]
+SAM     EASY RUN 6 KM
+───────────────────────────────────────────────────────────────
+```
+
+`render.py --fixture fixtures/together-events.json` renders one.
+
+## Emoji
+
+People put emoji in calendar events, and neither display face has a single symbol glyph — not
+even `♥` — so one used to come out as a `.notdef` box. Any character the text face can't draw is
+looked up in **Noto Emoji** (monochrome, OFL) and drawn from there; anything neither face has is
+dropped, because a gap reads better on a wall than a box. If Noto Emoji isn't installed, every
+emoji is simply dropped, so the fetch is optional.
+
+Two details follow from a 1-bit screen with no colour:
+
+- **Sequences collapse to their first picture**, since laying them out needs libraqm: 🏋️‍♀️ draws as
+  🏋, 👍🏽 as 👍, 1️⃣ as `1`.
+- **Hearts are redrawn solid.** Noto hatches the coloured hearts to stand in for a colour this
+  screen hasn't got, which at 24 px is a smudge, so ❤️ 💙 💜 and the rest all draw as `♥`.
+
+Emoji are kept verbatim in `today.json` — the substitutions are a property of the picture, not the data.
 
 ## Data formats (all optional)
 

@@ -1,0 +1,16 @@
+[
+  {
+    "summary": "Long run 14 km",
+    "location": "Riverside Park",
+    "creator": {"email": "alex@example.com"},
+    "start": {"dateTime": "2026-09-27T06:30:00+07:00"},
+    "end": {"dateTime": "2026-09-27T08:30:00+07:00"}
+  },
+  {
+    "summary": "Easy run 6 km",
+    "location": "Riverside park",
+    "creator": {"email": "sam@example.com"},
+    "start": {"dateTime": "2026-09-27T06:45:00+07:00"},
+    "end": {"dateTime": "2026-09-27T07:45:00+07:00"}
+  }
+]

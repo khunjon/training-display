@@ -19,7 +19,9 @@ class ServerTest(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.out = Path(cls.tmp.name)
-        cls.opts = s.server_options({}, {"bind": "127.0.0.1", "port": 0})
+        # quiet off: these are route tests, and the live clock must not wander into the
+        # overnight window and change refresh_rate under them (refresh_rate_at has its own tests)
+        cls.opts = s.server_options({"server": {"quiet": None}}, {"bind": "127.0.0.1", "port": 0})
         cls.httpd = s.serve(cls.out, cls.opts)
         cls.base = f"http://127.0.0.1:{cls.opts['port']}"
         threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
