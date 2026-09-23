@@ -27,7 +27,7 @@ plan-writing tools ──▶  shared Google Calendar  ◀── partner (phone)
                                 ▼
 goals/*.md (frontmatter) ─┐
 activity_log.csv          ├─▶  render.py  ─▶  today.json + today.png (800×480, 1-bit)
-quotes.md                 ┘        │            (launchd/cron: hourly)
+quotes.md                 ┘        │            (launchd/cron: every 15 min)
                                    ▼
                           server.py  (LAN only)  /today.png  /api/setup  /api/display
                                    │  Wi-Fi, hourly fetch
@@ -46,7 +46,14 @@ quotes.md                 ┘        │            (launchd/cron: hourly)
 - **Done state comes from a local activity log**, never from writing back to the calendar. If
   something was logged that wasn't planned, the log wins and it still shows as done.
 - **LAN only.** Nothing leaves the house; health data stays local.
-- If the calendar is unreachable, the last good frame is re-rendered with a `(stale)` stamp — never a blank wall.
+- If the calendar is unreachable, the last good frame is re-rendered with a `stale` stamp — never a blank wall.
+  On a new day it never shows yesterday's plan: the date, countdown and quote are today's, and the
+  empty rows say `CALENDAR OFFLINE`.
+- **A low panel battery shows as a small battery mark** in the corner, from the voltage the device
+  reports on each check-in (`battery_low_v`, default 3.6 V). A dead e-paper panel freezes on its last
+  frame and looks current, so the mark comes a few days early and stays until the panel is charged.
+- **A fresh frame carries no clock**, so re-rendering an unchanged day produces the same bytes and the
+  panel, which redraws only when the image hash changes, stays still. The footer appears only when stale.
 
 ## Hardware
 
@@ -79,7 +86,7 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
    "until": "06:10"}`: the device sleeps through the window in one go; `null` disables) and `image_url`
    (only if the device cannot reuse the host it reached you on, e.g. behind a proxy).
 7. **Schedule (macOS).** `scripts/install_launchd.sh` installs two launchd agents: the renderer at
-   06:00 then hourly to 21:00 (and on load), and the server kept alive. `--guard path/to/wrapper.sh`
+   every 15 minutes from 06:00 to 22:45 (and on load), and the server kept alive. `--guard path/to/wrapper.sh`
    wraps the render job in your own notify-on-failure script; `--uninstall` removes both.
    On Linux, a cron line for `render.py` and a systemd unit for `server.py` do the same.
 8. **Device.** Flash the [TRMNL firmware](https://github.com/usetrmnl/firmware), and in its captive

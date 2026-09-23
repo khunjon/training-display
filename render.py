@@ -43,6 +43,12 @@ TOGETHER_TAGS = {"together", "us", "both"}
 APART_TAGS = {"apart", "solo", "separate"}
 TOGETHER_WINDOW_MIN = 30  # two sessions starting this close, in the same place, are one outing
 
+# The panel's LiPo reads ~4.2 V full and browns out near 3.3 V; below 3.6 V it is on the
+# steep end of the curve with days, not weeks, left. Recovery needs +0.1 V (i.e. a charge),
+# so a reading that wobbles at the line cannot flip the mark — and the panel — every hour.
+BATTERY_LOW_V = 3.6
+BATTERY_HYSTERESIS_V = 0.1
+
 # Neither display face has a single symbol glyph — not even ♥ — so an emoji anyone types
 # into the calendar comes out as a .notdef box. Noto Emoji is monochrome and draws them.
 EMOJI_FONT = "NotoEmoji-Regular.ttf"
@@ -111,14 +117,23 @@ def fetch_events(day: dt.date, cfg: dict) -> list[dict]:
 
 # ---------------------------------------------------------------- resolver
 
+def _words(words: tuple[str, ...]) -> re.Pattern:
+    """Whole words, plus the endings a title actually uses: 'runs', 'running', 'rested'.
+    A bare substring test read 'coffee' and 'office' as rest, 'brunch' as a run."""
+    return re.compile(r"\b(?:" + "|".join(words) + r")(?:s|es|ing|ning|ed)?\b")
+
+
+RUN_RE, STRENGTH_RE, REST_RE = _words(RUN_WORDS), _words(STRENGTH_WORDS), _words(REST_WORDS)
+
+
 def classify(label: str) -> str:
     """'run' | 'strength' | 'rest' | 'other' from a session title."""
     s = label.lower()
-    if any(w in s for w in REST_WORDS) and "recovery run" not in s:
+    if REST_RE.search(s) and "recovery run" not in s:
         return "rest"
-    if any(w in s for w in STRENGTH_WORDS):
+    if STRENGTH_RE.search(s):
         return "strength"
-    if any(w in s for w in RUN_WORDS):
+    if RUN_RE.search(s):
         return "run"
     return "other"
 
@@ -431,6 +446,28 @@ def _draw_cake(d, x: int, y: int, size: int, fill=0):
 ICONS = {"heart": _draw_heart, "cake": _draw_cake}
 
 
+def battery_low(device: dict | None, was_low: bool = False, low_v: float = BATTERY_LOW_V) -> bool:
+    """Whether the panel's battery wants charging, from the headers `server.py` saved.
+
+    A dead panel freezes on its last frame and looks current, so this is drawn a few
+    days early. Once low it stays low until the voltage is `BATTERY_HYSTERESIS_V` above
+    the line. No reading (no device yet, a half-written file) keeps the previous answer.
+    """
+    try:
+        v = float((device or {})["Battery-Voltage"])
+    except (KeyError, TypeError, ValueError):
+        return was_low
+    return v < low_v + (BATTERY_HYSTERESIS_V if was_low else 0)
+
+
+def _draw_battery(d, x: int, y: int, w: int = 30, h: int = 15, fill=0):
+    """An almost-empty battery, bounding box top-left at (x, y): outline, terminal nub, one sliver."""
+    nub = 3
+    d.rounded_rectangle([x, y, x + w - nub, y + h], radius=2, outline=fill, width=2)
+    d.rectangle([x + w - nub, y + h // 2 - 3, x + w, y + h // 2 + 3], fill=fill)
+    d.rectangle([x + 4, y + 4, x + 8, y + h - 4], fill=fill)
+
+
 def build(day: dt.date, events: list[dict], cfg: dict, now: dt.datetime | None = None) -> dict:
     tz = ZoneInfo(cfg["timezone"])
     sessions = resolve(events, day, cfg["people"], tz)
@@ -472,8 +509,8 @@ def _font_loader(fonts_dir: Path):
         if (name, size) not in loaded:
             try:
                 loaded[(name, size)] = ImageFont.truetype(str(fonts_dir / name), size)
-            except OSError:
-                loaded[(name, size)] = ImageFont.load_default()
+            except OSError:  # sized, so layout and fitting still behave without the fonts
+                loaded[(name, size)] = ImageFont.load_default(size)
         return loaded[(name, size)]
 
     return font
@@ -524,7 +561,7 @@ def _wrap(text: str, tlen, font, max_w: int) -> list[str]:
     lines, cur = [], ""
     for w in text.split():
         t = (cur + " " + w).strip()
-        if tlen(t, font) <= max_w:
+        if tlen(t, font) <= max_w or not cur:  # a word wider than the line gets a line of its own
             cur = t
         else:
             lines.append(cur)
@@ -567,19 +604,32 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
             d.text((x0, y0 + drop if is_emoji else y0), run, font=rf, fill=fill)
             x0 += d.textlength(run, font=rf)
 
+    def clip(text, f, max_w, tail="…", force=False):
+        """`text` if it fits, else cut short with `tail` so it stops at `max_w`."""
+        if not force and tlen(text, f) <= max_w:
+            return text
+        full = text
+        while text and tlen(text.rstrip() + tail, f) > max_w:
+            text = text[:-1]
+        if full[len(text):len(text) + 1] not in ("", " ") and " " in text:  # cut mid-word: back to the last whole one
+            text = text.rsplit(" ", 1)[0]
+        return text.rstrip(" ,;:·—–-") + tail
+
     def fit(text, mk, max_w, start, floor):
+        """Shrink from `start` toward `floor` until it fits; past the floor, cut it short.
+        Returns (text, font, size) — the text may have lost its end to an ellipsis."""
         size = start
         while size > floor and tlen(text, mk(size)) > max_w:
             size -= 2
-        return mk(size), size
+        f = mk(size)
+        return clip(text, f, max_w), f, size
 
     # --- top strip
     y = M
     dtext((M, y), data["date_label"], mono(26), 0)
     if data.get("race"):
         r = data["race"]
-        txt = f"{r['days']} DAYS TO {r['name'].upper()}"
-        f, size = fit(txt, mono, W - 2 * M - 220, 26, 18)
+        txt, f, size = fit(f"{r['days']} DAYS TO {r['name'].upper()}", mono, W - 2 * M - 220, 26, 18)
         dtext((W - M - tlen(txt, f), y + (26 - size) // 2), txt, f, 0)
     y += 44
     d.line([(M, y), (W - M, y)], fill=0, width=3)
@@ -590,13 +640,17 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
     area_top, area_h = y + 26, 244
     x = M + 110
 
+    def drop_to_baseline(full, f) -> int:
+        """How far to lower a label shrunk from face `full` to `f` so both sit on one baseline."""
+        return full.getmetrics()[0] - f.getmetrics()[0]
+
     def done_badge(text: str, top: int):
         bw, bh = 150, 44
         bx = W - M - bw
         d.rounded_rectangle([bx, top, bx + bw, top + bh], radius=8, fill=0)
-        f2, _ = fit("DONE", mono_b, bw - 16, 24, 16)
+        _, f2, _ = fit("DONE", mono_b, bw - 16, 24, 16)
         dtext((bx + (bw - tlen("DONE", f2)) / 2, top + 8), "DONE", f2, 255)
-        f3, _ = fit(text, mono, 220, 20, 14)
+        text, f3, _ = fit(text, mono, 220, 20, 14)
         dtext((W - M - tlen(text, f3), top + bh + 8), text, f3, 0)
 
     tg = data.get("together") if len(rows) > 1 else None
@@ -608,20 +662,18 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
         dtext((M + 13, area_top + 7), "TOGETHER", fp, 255)
         meta = "  ·  ".join(p for p in (tg.get("time"), tg.get("place")) if p)
         if meta:
-            f, _ = fit(meta, mono, W - 2 * M - pw - 20, 24, 16)
+            meta, f, _ = fit(meta, mono, W - 2 * M - pw - 20, 24, 16)
             dtext((M + pw + 20, area_top + 8), meta, f, 0)
 
     if tg and tg.get("collapse"):  # both doing the same thing: one label, both names under it
-        label = tg["label"]
-        f, size = fit(label, cond, W - 2 * M, 80, 32)
+        label, f, size = fit(tg["label"], cond, W - 2 * M, 80, 32)
         dtext((max(M, (W - tlen(label, f)) / 2), area_top + 52), label, f, 0)
         names = "  ·  ".join(row["name"].upper() for row in rows)
         fn = mono(22)
         dtext(((W - tlen(names, fn)) / 2, area_top + 62 + int(size * 1.1)), names, fn, 0)
         done = next((row["done"] for row in rows if row.get("done")), None)
         if done:
-            t = f"DONE  ·  {done}"
-            fd, _ = fit(t, mono_b, W - 2 * M, 20, 14)
+            t, fd, _ = fit(f"DONE  ·  {done}", mono_b, W - 2 * M, 20, 14)
             dtext(((W - tlen(t, fd)) / 2, area_top + 98 + int(size * 1.1)), t, fd, 0)
     elif tg:  # together, but each with our own work: no divider, and the time and place said once
         line_h = (area_h - 52) // n
@@ -631,8 +683,8 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
             sess, done = row.get("session"), row.get("done")
             if not sess:
                 continue
-            f, _ = fit(sess["label"], cond, W - M - (170 if done else 0) - x, 54, 32)
-            dtext((x, y0), sess["label"], f, 0)
+            label, f, _ = fit(sess["label"], cond, W - M - (170 if done else 0) - x, 54, 32)
+            dtext((x, y0 + drop_to_baseline(cond(54), f)), label, f, 0)
             if done:
                 done_badge(done, y0 + 4)
     else:
@@ -642,19 +694,19 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
             dtext((M, y0 + 6), row["name"].upper(), mono(20), 0)
             sess, done = row.get("session"), row.get("done")
             if not sess:
-                if i == 0:
-                    dtext((x, y0 - 4), "NO PLAN YET", cond_semi(48), 0)
+                if i == 0:  # offline: say so, or an unreachable calendar reads as an empty day
+                    dtext((x, y0 - 4), "CALENDAR OFFLINE" if data.get("offline") else "NO PLAN YET", cond_semi(48), 0)
                 else:
                     d.line([(x, y0 + 22), (x + 44, y0 + 22)], fill=0, width=5)
             else:
                 right_limit = W - M - (170 if done else 0)
-                f, _ = fit(sess["label"], cond, right_limit - x, 64, 36)
-                dtext((x, y0 - 8), sess["label"], f, 0)
+                label, f, _ = fit(sess["label"], cond, right_limit - x, 64, 36)
+                dtext((x, y0 - 8 + drop_to_baseline(cond(64), f)), label, f, 0)
                 parts = [p for p in (sess["time"] or ("ALL DAY" if sess["all_day"] else ""), sess["place"]) if p]
                 if parts:
                     meta = "  ·  ".join(parts)
                     # stop short of the done column: a long place name used to run into it
-                    fm, _ = fit(meta, mono, W - M - x - (236 if done else 0), 24, 14)
+                    meta, fm, _ = fit(meta, mono, W - M - x - (236 if done else 0), 24, 14)
                     dtext((x, y0 + 64), meta, fm, 0)
                 if done:
                     done_badge(done, y0 + 4)
@@ -678,22 +730,67 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
             if len(lines) <= 2 or size <= 22:
                 break
             size -= 2
+        if len(lines) > 2:  # still too long at the floor: end the second line on an ellipsis
+            lines = [lines[0], clip(lines[1], f, W - M - qx, tail="…" if data.get("special") else "…”", force=True)]
         ly = qy + 18
-        for ln in lines[:2]:
+        for ln in lines:
             dtext((qx, ly), ln, f, 0)
             ly += int(size * 1.15)
         if author:
             dtext((qx, ly + 4), f"— {author}", mono(18), 0)
 
-    # --- footer
-    upd = f"updated {data['updated']}"
-    f = mono(14)
-    dtext((W - M - tlen(upd, f), H - M + 6), upd, f, 0)
+    # --- footer: only when stale. A fresh frame carries no clock, so re-rendering the same
+    # day gives the same bytes and the panel (which redraws on a hash change) stays still.
+    # The battery mark is a flag, never the voltage, for the same reason.
+    fx = W - M  # the footer fills from the right edge
+    if data.get("battery_low"):
+        _draw_battery(d, fx - 30, H - M + 6)
+        fx -= 42
+    if data.get("stale"):
+        note = f"stale · {data['stale']}"
+        f = mono(14)
+        dtext((fx - tlen(note, f), H - M + 6), note, f, 0)
 
     return img.convert("1", dither=Image.NONE)
 
 
 # ---------------------------------------------------------------- main
+
+def stale_frame(day: dt.date, cfg: dict, last: dict | None) -> dict:
+    """What to draw when the calendar is unreachable — never a blank wall, never yesterday.
+
+    The last good frame if it is today's. Otherwise today built from everything local
+    (date, countdown, quote, logged sessions), with the empty rows saying the calendar
+    is offline rather than that nothing is planned.
+    """
+    if last and last.get("date") == day.isoformat():
+        data, since = dict(last), last.get("updated", "")
+    else:
+        data = build(day, [], cfg)
+        data["offline"] = True
+        since = f"{last.get('date_label', '')} {last.get('updated', '')}" if last else ""
+    since = since.split(" (")[0].strip()  # frames from before `stale` existed carried "(stale)" in `updated`
+    data["stale"] = f"last good {since}" if since else "calendar not reached yet"
+    return data
+
+
+def _write_atomic(path: Path, write) -> None:
+    """Write via a temp file and a rename, so the server never serves (or hashes) half a file."""
+    tmp = path.with_name(path.name + ".tmp")
+    write(tmp)
+    os.replace(tmp, path)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save_frame(img, path: Path) -> None:
+    _write_atomic(path, lambda t: img.save(t, format="PNG"))
+
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -709,30 +806,34 @@ def main(argv=None) -> int:
     day = dt.date.fromisoformat(args.date) if args.date else dt.datetime.now(tz).date()
     out = _p(args.out) or _p(cfg["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
+    last = _read_json(out / "today.json")
+    low = battery_low(_read_json(out / "device.json"), bool(last and last.get("battery_low")),
+                      float(cfg.get("battery_low_v", BATTERY_LOW_V)))
 
     if args.fixture:
         events = json.loads(Path(args.fixture).read_text())
     else:
         try:
             events = fetch_events(day, cfg)
-        except Exception as e:  # keep the last good frame on the wall; never a blank
+        except Exception as e:  # keep the wall current and honest; never a blank
             sys.stderr.write(f"calendar fetch failed: {e}\n")
-            last = out / "today.json"
-            if last.exists():
-                data = json.loads(last.read_text())
-                data["updated"] = data.get("updated", "").split(" ")[0] + " (stale)"
-                render(data, cfg["fonts_dir"]).save(out / "today.png")
-                sys.stderr.write("re-rendered the last good frame with a stale stamp\n")
+            data = stale_frame(day, cfg, last)  # today.json stays the last *good* data
+            data["battery_low"] = low
+            save_frame(render(data, cfg["fonts_dir"]), out / "today.png")
+            sys.stderr.write(f"drew a stale frame ({'offline rows' if data.get('offline') else 'last good'})\n")
             return 1
         if args.dump_events:
             (out / f"events-{day.isoformat()}.json").write_text(json.dumps(events, indent=1))
 
     data = build(day, events, cfg)
-    (out / "today.json").write_text(json.dumps(data, indent=1, ensure_ascii=False))
-    render(data, cfg["fonts_dir"]).save(out / "today.png")
+    data["battery_low"] = low
+    _write_atomic(out / "today.json", lambda t: t.write_text(json.dumps(data, indent=1, ensure_ascii=False)))
+    save_frame(render(data, cfg["fonts_dir"]), out / "today.png")
     summary = "  ".join(f"{r['name']}={r['session'] and r['session']['label']}{' DONE' if r['done'] else ''}" for r in data["rows"])
     if data.get("together"):
         summary = f"[together] {summary}"
+    if low:
+        summary += "  [battery low]"
     print(f"{out / 'today.png'}  {summary}")
     return 0
 

@@ -16,13 +16,15 @@ A living-room e-paper screen answering "what are we training today?" — see `RE
 - **The vault is data; this repo is code.** The renderer reads vault files by configured path and never writes to the vault. Output goes only to `output_dir`.
 - **One screen, one question.** Today only, both people, countdown, quote. No readiness numbers, no verdict, no week view, no weather. If a feature needs a second page it does not belong here.
 - **Health data stays on the LAN.** The server binds locally; nothing is published to the internet.
-- **Never a blank wall.** A failed fetch re-renders the last good frame with a `(stale)` stamp.
+- **Never a blank wall, never yesterday.** A failed fetch re-renders the last good frame with a `stale` footer; on a new day it builds today from local sources with the rows marked `CALENDAR OFFLINE` (`stale_frame`).
+- **Flags, not numbers, in the pixels.** The low-battery mark is drawn from `device.json` (written by `server.py`) as an on/off icon with hysteresis — never the voltage, which would change the hash hourly.
+- **No clock on a fresh frame.** The device redraws when the PNG hash changes, so anything time-varying in the pixels (like an `updated HH:MM`) flashes the panel on every render. Only a stale frame gets a footer.
 
 ## Phases (status lives in the vault note)
 
-0. Shared calendar + service account — done. **Still open:** `push.py`, a CLI the vault's plan-changing skills call to write a session (title, date, optional time/location; default slots come from config).
+0. Shared calendar + service account — done. The write path (`calendar_push.py`) lives in the vault, not here; what is still open is a *schedule* that calls it, so the week is on the calendar before the wall needs it.
 1. `render.py` — done, tested.
-2. `server.py` — done, tested. Stdlib, port 8787: `/today.png`, `/today.json`, `/health`, `/` (phone page), and the TRMNL protocol `/api/setup`, `/api/display` (`filename` = hash of the PNG, so the device only redraws on change), `/api/log`. `scripts/install_launchd.sh` generates and loads two agents: `<prefix>.training-display` (render, 06:00 then hourly to 21:00, RunAtLoad, optionally wrapped by `--guard`) and `<prefix>.training-display-server` (KeepAlive). Logs in `~/Library/Logs/training-display*.log`. Protocol details were read from the firmware source (`lib/trmnl/src/parse_response_api_display.cpp`, `request_headers.cpp`).
+2. `server.py` — done, tested. Stdlib, port 8787: `/today.png`, `/today.json`, `/health`, `/` (phone page), and the TRMNL protocol `/api/setup`, `/api/display` (`filename` = hash of the PNG, so the device only redraws on change), `/api/log`. `scripts/install_launchd.sh` generates and loads two agents: `<prefix>.training-display` (render, every 15 min 06:00–22:45, RunAtLoad, optionally wrapped by `--guard`) and `<prefix>.training-display-server` (KeepAlive). Logs in `~/Library/Logs/training-display*.log`. Protocol details were read from the firmware source (`lib/trmnl/src/parse_response_api_display.cpp`, `request_headers.cpp`).
 3. Flash the TRMNL firmware on the Seeed × TRMNL 7.5" kit, point it at the server, hang it.
 
 ## Conventions

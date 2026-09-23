@@ -38,6 +38,14 @@ class Classify(unittest.TestCase):
         ]:
             self.assertEqual(r.classify(label), kind, label)
 
+    def test_whole_words_only(self):
+        for label, kind in [
+            ("Coffee with Sam", "other"), ("Office day", "other"), ("Forest walk", "other"), ("Brunch", "other"),
+            ("Grace's party", "other"), ("Day off", "rest"), ("Rested legs", "rest"), ("Running club", "run"),
+            ("Lifting", "strength"), ("Race day", "run"),
+        ]:
+            self.assertEqual(r.classify(label), kind, label)
+
 
 class Resolve(unittest.TestCase):
     def test_split_by_creator(self):
@@ -398,6 +406,77 @@ class Render(unittest.TestCase):
             img = r.render(c, fonts_dir="/nonexistent")  # falls back to the default font
             self.assertEqual(img.mode, "1")
             self.assertEqual(img.size, (800, 480))
+
+
+    def _long(self):
+        sess = {"label": "PILATES REFORMER INTERMEDIATE CLASS WITH FRIENDS AND THEN SOME", "kind": "other",
+                "time": "13:30–16:30", "place": "A Studio With A Very Long Name On The Far Side Of Town", "all_day": False}
+        return {"date": str(DAY), "date_label": "FRI 18 SEP", "updated": "06:00", "together": None,
+                "race": {"name": "An Extremely Long Race Name That Goes On And On 10K", "days": 5, "date": "x"},
+                "rows": [{"name": "Alex", "session": sess, "done": "9.7 KM · 7:21 · HR 150 · AND A LOT MORE"},
+                         {"name": "Sam", "session": dict(sess), "done": None}],
+                "quote": (" ".join(["Keep going even when the road is long and the day is hot."] * 4), "Someone")}
+
+    def test_nothing_runs_past_the_right_margin(self):
+        img = r.render(self._long(), fonts_dir="/nonexistent")
+        margin = [img.getpixel((x, y)) for x in range(r.W - 28 + 3, r.W) for y in range(r.H)]
+        self.assertTrue(all(v == 255 for v in margin), "ink in the right margin")
+
+    def test_fresh_frame_has_no_clock(self):
+        a, b = self._long(), self._long()
+        b["updated"] = "21:45"
+        self.assertEqual(r.render(a, fonts_dir="/nonexistent").tobytes(), r.render(b, fonts_dir="/nonexistent").tobytes())
+        b["stale"] = "last good 06:00"
+        self.assertNotEqual(r.render(a, fonts_dir="/nonexistent").tobytes(), r.render(b, fonts_dir="/nonexistent").tobytes())
+
+
+class Stale(unittest.TestCase):
+    CFG = {"timezone": TZ, "people": PEOPLE}
+
+    def test_same_day_keeps_the_last_good_frame(self):
+        last = r.build(DAY, [ev("Easy run", "18:00", "19:30")], self.CFG, now=dt.datetime(2026, 9, 18, 9, 0))
+        data = r.stale_frame(DAY, self.CFG, last)
+        self.assertEqual(data["rows"][0]["session"]["label"], "EASY RUN")
+        self.assertEqual(data["stale"], "last good 09:00")
+        self.assertNotIn("offline", data)
+
+    def test_new_day_never_shows_yesterday(self):
+        last = r.build(DAY, [ev("Easy run", "18:00", "19:30")], self.CFG, now=dt.datetime(2026, 9, 18, 21, 0))
+        data = r.stale_frame(DAY + dt.timedelta(days=1), self.CFG, last)
+        self.assertEqual(data["date_label"], "SAT 19 SEP")
+        self.assertIsNone(data["rows"][0]["session"])
+        self.assertTrue(data["offline"])
+        self.assertEqual(data["stale"], "last good FRI 18 SEP 21:00")
+        self.assertEqual(r.render(data, fonts_dir="/nonexistent").size, (800, 480))
+
+    def test_never_fetched(self):
+        data = r.stale_frame(DAY, self.CFG, None)
+        self.assertTrue(data["offline"])
+        self.assertEqual(data["stale"], "calendar not reached yet")
+
+
+class Battery(unittest.TestCase):
+    def test_threshold_and_hysteresis(self):
+        dev = lambda v: {"Battery-Voltage": v}  # noqa: E731 — the headers as server.py saves them
+        self.assertFalse(r.battery_low(dev("4.01")))
+        self.assertTrue(r.battery_low(dev("3.59")))
+        self.assertTrue(r.battery_low(dev("3.65"), was_low=True))  # wobbling back over the line is not a charge
+        self.assertFalse(r.battery_low(dev("3.72"), was_low=True))  # a charge is
+        self.assertTrue(r.battery_low(dev("3.75"), low_v=3.8))
+
+    def test_no_reading_keeps_the_last_answer(self):
+        for dev in (None, {}, {"Battery-Voltage": "n/a"}):
+            self.assertFalse(r.battery_low(dev))
+            self.assertTrue(r.battery_low(dev, was_low=True))
+
+    def test_mark_is_drawn_in_the_footer_and_inside_the_margin(self):
+        base = Render()._long()
+        low = dict(base, battery_low=True)
+        a, b = r.render(base, fonts_dir="/nonexistent"), r.render(low, fonts_dir="/nonexistent")
+        self.assertNotEqual(a.tobytes(), b.tobytes())
+        self.assertEqual(a.crop((0, 0, r.W, r.H - 28)).tobytes(), b.crop((0, 0, r.W, r.H - 28)).tobytes())  # footer only
+        both = r.render(dict(low, stale="last good 06:00"), fonts_dir="/nonexistent")
+        self.assertTrue(all(both.getpixel((x, y)) == 255 for x in range(r.W - 28 + 3, r.W) for y in range(r.H)))
 
 
 class SpecialDays(unittest.TestCase):

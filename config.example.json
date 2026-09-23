@@ -16,6 +16,7 @@
   ],
 
   "together_window_min": 30,
+  "battery_low_v": 3.6,
 
   "goals_dir": "~/vault/health/Goals",
   "quotes_file": "~/vault/ai/Projects/Training Display Quotes.md",

@@ -23,7 +23,8 @@ TRMNL notes (from the open-source firmware, 2026-09):
     through the night in one go.
 
 Stdlib only; no auth (LAN only by design — see README). Writes only
-<output_dir>/device.json, the last headers a device sent, for debugging.
+<output_dir>/device.json, the last headers a device sent — for debugging, and
+for render.py's low-battery mark.
 
 Usage
   server.py                     # bind 0.0.0.0:8787 (or config "server")
@@ -43,7 +44,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from render import DEFAULT_CONFIG, load_config
+from render import DEFAULT_CONFIG, _write_atomic, load_config
 
 DEFAULTS = {
     "bind": "0.0.0.0",
@@ -152,7 +153,8 @@ class State:
         seen["path"] = path
         seen["at"] = dt.datetime.now().astimezone().isoformat(timespec="seconds")
         try:
-            (self.output_dir / "device.json").write_text(json.dumps(seen, indent=1))
+            # render.py reads this for the battery mark; a rename means it never sees half a file
+            _write_atomic(self.output_dir / "device.json", lambda t: t.write_text(json.dumps(seen, indent=1)))
         except OSError:
             pass
         sys.stderr.write(f"device {path} {json.dumps(seen)}\n")
