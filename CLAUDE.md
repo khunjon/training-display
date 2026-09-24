@@ -8,7 +8,7 @@ A living-room e-paper screen answering "what are we training today?" — see `RE
 - **Quotes:** `~/Projects/life/ai/Projects/Training Display Quotes.md` (edited in Obsidian; this repo only reads it).
 - **Local config and secrets (never in git):** `~/.config/training-display/config.json` and `sa.json` (the Google service-account key, mode 600).
 - **Runtime state:** `~/.local/state/training-display/` — `venv/` (python 3.12 via `uv`; google-auth, requests, Pillow), `fonts/`, `today.png`, `today.json`, `events-*.json`.
-- **Run everything with the venv:** `~/.local/state/training-display/venv/bin/python render.py`. Tests: `venv/bin/python -m unittest discover tests`.
+- **Run everything with the venv:** `~/.local/state/training-display/venv/bin/python render.py`. Tests: `~/.local/state/training-display/venv/bin/python -m unittest discover tests`.
 
 ## Rules
 
@@ -22,10 +22,10 @@ A living-room e-paper screen answering "what are we training today?" — see `RE
 
 ## Phases (status lives in the vault note)
 
-0. Shared calendar + service account — done. The write path (`calendar_push.py`) lives in the vault, not here; what is still open is a *schedule* that calls it, so the week is on the calendar before the wall needs it.
-1. `render.py` — done, tested.
-2. `server.py` — done, tested. Stdlib, port 8787: `/today.png`, `/today.json`, `/health`, `/` (phone page), and the TRMNL protocol `/api/setup`, `/api/display` (`filename` = hash of the PNG, so the device only redraws on change), `/api/log`. `scripts/install_launchd.sh` generates and loads two agents: `<prefix>.training-display` (render, every 15 min 06:00–22:45, RunAtLoad, optionally wrapped by `--guard`) and `<prefix>.training-display-server` (KeepAlive). Logs in `~/Library/Logs/training-display*.log`. Protocol details were read from the firmware source (`lib/trmnl/src/parse_response_api_display.cpp`, `request_headers.cpp`).
-3. Flash the TRMNL firmware on the Seeed × TRMNL 7.5" kit, point it at the server, hang it.
+0. Shared calendar + service account. The write path (`calendar_push.py`) and the nightly job that fills the week ahead live outside this repo (see the vault note).
+1. `render.py`.
+2. `server.py`. Stdlib, port 8787: `/today.png`, `/today.bmp` (1-bit, what `/api/setup` points at), `/today.json`, `/health`, `/` (phone page), and the TRMNL protocol `/api/setup`, `/api/display` (`filename` = hash of the PNG, so the device only redraws on change), `/api/log`. `scripts/install_launchd.sh` generates and loads two agents: `<prefix>.training-display` (render, every 15 min 06:00–22:45, RunAtLoad, optionally wrapped by `--guard`) and `<prefix>.training-display-server` (KeepAlive). Logs in `~/Library/Logs/training-display*.log`. Protocol details were read from the firmware source (`lib/trmnl/src/parse_response_api_display.cpp`, `request_headers.cpp`).
+3. The device: the Seeed × TRMNL 7.5" kit on the TRMNL firmware it ships with (1.5.x, no flashing), pointed at the server through the captive portal's *API server* field. 1.5.x fetches the setup image as a 1-bit BMP, hence `/today.bmp`.
 
 ## Conventions
 
