@@ -17,3 +17,13 @@ curl -sSfL -o "$DIR/NotoEmoji-Regular.ttf" \
   "https://github.com/google/fonts/raw/main/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf" \
   && echo "fetched NotoEmoji-Regular.ttf" \
   || echo "NotoEmoji-Regular.ttf not fetched — emoji will be dropped from the frame" >&2
+
+# Thai, a partner for each display face (both are Latin only). Static instances from the Noto
+# project, since Google Fonts ships only the variable font. Optional like the emoji face:
+# without them Thai is dropped from the frame.
+for w in CondensedBold CondensedSemiBold Medium Bold; do
+  curl -sSfL -o "$DIR/NotoSansThai-$w.ttf" \
+    "https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansThai/hinted/ttf/NotoSansThai-$w.ttf" \
+    && echo "fetched NotoSansThai-$w.ttf" \
+    || echo "NotoSansThai-$w.ttf not fetched — Thai will be dropped from the frame" >&2
+done

@@ -74,8 +74,8 @@ Any device that can fetch a PNG over Wi-Fi works; the phone page at `/` is the f
 2. **Config.** Copy `config.example.json` to `~/.config/training-display/config.json` and edit.
    Everything except `calendar_id` and `people` is optional — leave out `goals_dir`, `activity_log`
    or `quotes_file` and that zone is simply not drawn.
-3. **Fonts.** `scripts/fetch_fonts.sh` downloads Barlow Condensed, IBM Plex Mono and Noto Emoji
-   (all OFL) into `fonts_dir`. Noto Emoji is optional — see *Emoji* below.
+3. **Fonts.** `scripts/fetch_fonts.sh` downloads Barlow Condensed, IBM Plex Mono, Noto Emoji and
+   Noto Sans Thai (all OFL) into `fonts_dir`. The last two are optional — see *Emoji* and *Thai* below.
 4. **Python.** `python3 -m venv venv && venv/bin/pip install -r requirements.txt`
 5. **Render.** `venv/bin/python render.py` → `today.png`. Try `--date 2026-09-21`, or
    `--fixture fixtures/sample-events.json` to render without a calendar.
@@ -143,6 +143,20 @@ Two details follow from a 1-bit screen with no colour:
   🏋, 👍🏽 as 👍, 1️⃣ as `1`.
 - **Hearts are redrawn solid.** Noto hatches the coloured hearts to stand in for a colour this
   screen hasn't got, which at 24 px is a smudge, so ❤️ 💙 💜 and the rest all draw as `♥`.
+
+## Thai
+
+Both display faces are Latin only, so a studio name typed in Thai came out as a row of boxes.
+Each face now has a **Noto Sans Thai** partner of about its weight and width (Condensed Bold beside
+Barlow, Medium beside Plex), drawn on the same baseline and a size up, since Thai sits at x-height
+next to all-caps labels. Without the Noto files Thai is dropped, like emoji.
+
+Thai stacks its vowels and tone marks, and the font's tables that place them are only read by
+libraqm, which Pillow's wheels can't use without a system library. So the renderer uses Pillow's
+basic layout everywhere and makes those moves itself, measured from the glyphs: a tone mark goes
+up over an upper vowel (ที่, น้ำ), marks step left of the stem of ป ฝ ฟ ฬ (ปั้น), and a lower vowel
+drops below the tail of ฎ ฏ. The one case it doesn't cover is ญ and ฐ losing their tail under a
+lower vowel, which needs a glyph swap.
 
 Emoji are kept verbatim in `today.json` — the substitutions are a property of the picture, not the data.
 

@@ -281,6 +281,66 @@ class Emoji(unittest.TestCase):
             self.assertEqual((img.mode, img.size), ("1", (800, 480)))
 
 
+class Thai(unittest.TestCase):
+    """Neither display face has Thai, and nothing reads the font's mark positioning."""
+
+    FONTS = Emoji.FONTS
+    font = Emoji.font
+    THAI = "NotoSansThai-CondensedBold.ttf"
+
+    def layout(self, text):
+        f = self.font(self.THAI, 70)
+        return f, r._thai_layout(text, f, {})
+
+    def test_thai_run_goes_to_the_thai_face(self):
+        text_font, thai = self.font(), self.font(self.THAI)
+        runs = r._runs("YOGA IN พร้อมพงษ์", text_font, None, {}, thai)
+        self.assertEqual([(run, f is thai) for run, f, _ in runs], [("YOGA IN ", False), ("พร้อมพงษ์", True)])
+
+    def test_dropped_when_no_thai_face(self):
+        runs = r._runs("YOGA IN พร้อมพงษ์", self.font(), None, {})
+        self.assertEqual([run for run, _f, _e in runs], ["YOGA IN"])
+
+    def test_marks_basic_layout_gets_right_are_left_alone(self):
+        self.assertEqual(self.layout("พร้อมพงษ์")[1], ("พร้อมพงษ์", []))
+
+    def test_tone_goes_over_the_upper_vowel(self):
+        for text, over in [("ที่", "ี"), ("น้ำ", "ำ")]:
+            f, (kept, moved) = self.layout(text)
+            self.assertEqual(kept, text.replace(moved[0][1], ""), text)
+            (_i, tone, dx, dy), = moved
+            self.assertEqual(dx, 0)
+            self.assertLess(r._ink(f, tone, {})[3] + dy, r._ink(f, over, {})[1], text)  # clear of it, above
+
+    def test_marks_step_off_the_ascender(self):
+        f, (kept, moved) = self.layout("ปั้น")
+        self.assertEqual(kept, "ปน")
+        self.assertEqual([m for _i, m, _x, _y in moved], ["ั", "้"])
+        stem = r._ink(f, "ป", {}, top=r._ink(f, "บ", {})[1] - 1)[0]
+        for _i, mark, dx, _dy in moved:
+            self.assertLessEqual(f.getlength("ป") + r._ink(f, mark, {})[2] + dx, stem)
+        self.assertLess(moved[1][3], 0)  # and the tone still climbs over the vowel
+
+    def test_lower_vowel_drops_below_the_tail(self):
+        f, (kept, moved) = self.layout("ฎุ")
+        (_i, _m, dx, dy), = moved
+        self.assertEqual((kept, dx), ("ฎ", 0))
+        self.assertGreater(r._ink(f, "ุ", {})[1] + dy, r._ink(f, "ฎ", {})[3])
+
+    def test_renders_a_frame_with_thai_everywhere(self):
+        sess = {"label": "YOGA CLASS IN พร้อมพงษ์", "kind": "other", "time": "16:00",
+                "place": "สวนลุมพินี", "all_day": False, "together": None}
+        data = {"date": str(DAY), "date_label": "SUN 27 SEP", "updated": "06:00",
+                "race": {"name": "วิ่งกรุงเทพ 10K", "days": 63, "date": "2026-11-29"},
+                "quote": ("ไม่มีใครแก่เกินเรียน", "สุภาษิต"),
+                "rows": [{"name": "Alex", "session": sess, "done": None},
+                         {"name": "เบญญา", "session": dict(sess, label="ว่ายน้ำ ที่นี่"), "done": "ปั้น"}],
+                "together": None}
+        for fonts in (self.FONTS, "/nonexistent"):
+            img = r.render(data, fonts_dir=fonts)
+            self.assertEqual((img.mode, img.size), ("1", (800, 480)))
+
+
 class ActivityLog(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

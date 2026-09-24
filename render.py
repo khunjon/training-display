@@ -64,6 +64,28 @@ EMOJI_SOLID = {c: "♥" for c in "❤♡❣\U0001F5A4\U0001F90D\U0001F90E"
                "\U0001F493\U0001F494\U0001F495\U0001F496\U0001F497\U0001F498\U0001F499"
                "\U0001F49A\U0001F49B\U0001F49C\U0001F49D\U0001F49F"}
 
+# Both display faces are Latin only, so Thai in an event title came out as a row of boxes.
+# Each face gets a Noto Sans Thai partner of about its weight and width, tried after the
+# face itself. Thai has no capitals and sits at x-height next to all-caps labels, so it is
+# drawn a size up to hold its own.
+THAI_FONTS = {
+    "BarlowCondensed-Bold.ttf": "NotoSansThai-CondensedBold.ttf",
+    "BarlowCondensed-SemiBold.ttf": "NotoSansThai-CondensedSemiBold.ttf",
+    "IBMPlexMono-Medium.ttf": "NotoSansThai-Medium.ttf",
+    "IBMPlexMono-Bold.ttf": "NotoSansThai-Bold.ttf",
+}
+THAI_SCALE = 1.1
+# Without libraqm nothing reads the font's mark positioning, and every vowel and tone mark
+# lands at its default spot: a tone mark on top of an upper vowel (ที่ loses its tone),
+# marks through the stem of ป ฝ ฟ ฬ, a lower vowel through the tail of ฎ ฏ. `_thai_layout`
+# does the moves those tables would have made, measured from the face.
+THAI_ABOVE = set("ัิีึื็ํ")  # upper vowels, nikhahit
+THAI_TONES = set("่้๊๋์")  # the four tones and thanthakhat
+THAI_BELOW = set("ฺุู")
+THAI_ASCENDERS = set("ปฝฟฬ")
+THAI_DESCENDERS = set("ฎฏ")  # ญ ฐ drop their tail instead, which takes a glyph swap we cannot do
+SARA_AM = "ำ"  # ำ carries a nikhahit over the consonant, so a tone before it goes up too
+
 
 # ---------------------------------------------------------------- config
 
@@ -507,8 +529,9 @@ def _font_loader(fonts_dir: Path):
 
     def font(name: str, size: int):
         if (name, size) not in loaded:
-            try:
-                loaded[(name, size)] = ImageFont.truetype(str(fonts_dir / name), size)
+            try:  # basic layout everywhere: the Thai marks are placed by hand, and libraqm would place them twice
+                loaded[(name, size)] = ImageFont.truetype(str(fonts_dir / name), size,
+                                                          layout_engine=ImageFont.Layout.BASIC)
             except OSError:  # sized, so layout and fitting still behave without the fonts
                 loaded[(name, size)] = ImageFont.load_default(size)
         return loaded[(name, size)]
@@ -531,18 +554,21 @@ def _has_glyph(font, ch: str, cache: dict) -> bool:
     return cache[(fk, ch)]
 
 
-def _runs(text: str, font, emoji, cache: dict) -> list[tuple[str, object, bool]]:
+def _runs(text: str, font, emoji, cache: dict, thai=None) -> list[tuple[str, object, bool]]:
     """Split a string into (run, font, is_emoji) pieces, each drawn by a font that has it.
 
-    Below U+2000 is ordinary text and never probed. Above it, the text face is asked
-    first — it does own the dashes, the curly quotes and a tick — then the emoji face.
-    A character neither one has is dropped: a gap reads better on a wall than a box.
+    ASCII is ordinary text and never probed. Beyond it, the text face is asked first —
+    it does own the accents, the dashes, the curly quotes and a tick — then the Thai
+    face, then the emoji face. A character none of them has is dropped: a gap reads
+    better on a wall than a box.
     """
     out: list[list] = []
     for ch in EMOJI_GLUE.sub("", text):
         ch = EMOJI_SOLID.get(ch, ch)
-        if ord(ch) < 0x2000 or _has_glyph(font, ch, cache):
+        if ch.isascii() or _has_glyph(font, ch, cache):
             f, is_emoji = font, False
+        elif thai is not None and _has_glyph(thai, ch, cache):
+            f, is_emoji = thai, False
         elif emoji is not None and _has_glyph(emoji, ch, cache):
             f, is_emoji = emoji, True
         else:
@@ -555,6 +581,60 @@ def _runs(text: str, font, emoji, cache: dict) -> list[tuple[str, object, bool]]
         out[0][0] = out[0][0].lstrip()
         out[-1][0] = out[-1][0].rstrip()
     return [(run, f, e) for run, f, e in out if run]
+
+
+def _ink(font, s: str, cache: dict, top: int | None = None) -> tuple:
+    """Where `s` puts ink, relative to a pen standing on the baseline — measured from the
+    pixels, since `getbbox` always reaches down to the baseline and a mark never does.
+    With `top`, only the ink above that height counts."""
+    key = (_font_key(font), "ink", s, top)
+    if key not in cache:
+        from PIL import Image, ImageDraw
+
+        l, t, r, b = font.getbbox(s, anchor="ls")
+        im = Image.new("1", (max(1, r - l), max(1, b - t)))
+        ImageDraw.Draw(im).text((-l, -t), s, font=font, fill=1, anchor="ls")
+        if top is not None:
+            im = im.crop((0, 0, im.width, max(1, top - t)))
+        box = im.getbbox() or (0, 0, 0, 0)
+        cache[key] = (box[0] + l, box[1] + t, box[2] + l, box[3] + t)
+    return cache[key]
+
+
+def _thai_layout(text: str, font, cache: dict) -> tuple[str, list[tuple[int, str, int, int]]]:
+    """Split a Thai run into what basic layout draws right and the marks it would not.
+
+    Returns (kept, moved): `kept` is `text` less the moved marks, and each moved mark is
+    (i, mark, dx, dy) — draw it at the pen after `kept[:i]`, nudged by (dx, dy). The marks
+    have no advance, so moving them never changes the run's width.
+    """
+    gap = max(1, round(getattr(font, "size", 20) * 0.05))
+    kept, moved = [], []
+    base, above = "", ""  # the consonant the marks sit on; the upper vowel already over it
+    for i, ch in enumerate(text):  # consonant, then an upper or lower vowel, then a tone
+        if ch not in THAI_ABOVE and ch not in THAI_TONES and ch not in THAI_BELOW:
+            base, above = ch, ""
+            kept.append(ch)
+            continue
+        mark = _ink(font, ch, cache)
+        dx = dy = 0
+        if base in THAI_ASCENDERS and ch not in THAI_BELOW:  # step left, clear of the stem
+            x_height = _ink(font, "บ", cache)[1] - gap  # above this, only the stem has ink
+            stem = _ink(font, base, cache, top=x_height)[0]
+            dx = min(0, stem - gap - (round(font.getlength(base)) + mark[2]))
+        if ch in THAI_TONES:
+            over = above or (SARA_AM if text[i + 1:i + 2] == SARA_AM else "")
+            if over:  # up above the vowel, not through it
+                dy = min(0, _ink(font, over, cache)[1] - gap - mark[3])
+        elif ch in THAI_BELOW and base in THAI_DESCENDERS:  # down below the tail
+            dy = max(0, _ink(font, base, cache)[3] + gap - mark[1])
+        if ch in THAI_ABOVE:
+            above = ch
+        if dx or dy:
+            moved.append((len(kept), ch, dx, dy))
+        else:
+            kept.append(ch)
+    return "".join(kept), moved
 
 
 def _wrap(text: str, tlen, font, max_w: int) -> list[str]:
@@ -593,15 +673,32 @@ def render(data: dict, fonts_dir: str | Path = "~/.local/state/training-display/
         """An emoji face sized to sit with `f`: 0.8×, since these faces run tall next to caps."""
         return font(EMOJI_FONT, max(10, round(getattr(f, "size", 20) * 0.8))) if has_emoji else None
 
+    def thai_for(f):
+        """The Thai partner of face `f`, a size up; None if it has none or it is not installed."""
+        name = THAI_FONTS.get(Path(str(getattr(f, "path", ""))).name)
+        if not name or not (fonts / name).is_file():
+            return None
+        return font(name, round(f.size * THAI_SCALE))
+
+    def runs(text, f):
+        return _runs(text, f, emoji_for(f), glyphs, thai_for(f))
+
     def tlen(text, f) -> float:
-        return sum(d.textlength(run, font=rf) for run, rf, _ in _runs(text, f, emoji_for(f), glyphs))
+        return sum(d.textlength(run, font=rf) for run, rf, _ in runs(text, f))
 
     def dtext(xy, text, f, fill=0):
-        """Draw a string that may mix text and emoji, one run per font."""
+        """Draw a string that may mix text, Thai and emoji, one run per font."""
         x0, y0 = xy
         drop = round(getattr(f, "size", 20) * 0.1)  # emoji sit high against cap height; nudge them down
-        for run, rf, is_emoji in _runs(text, f, emoji_for(f), glyphs):
-            d.text((x0, y0 + drop if is_emoji else y0), run, font=rf, fill=fill)
+        for run, rf, is_emoji in runs(text, f):
+            if rf is not f and not is_emoji:  # Thai: on the text's baseline, marks placed by hand
+                base = y0 + f.getmetrics()[0]
+                kept, moved = _thai_layout(run, rf, glyphs)
+                d.text((x0, base), kept, font=rf, fill=fill, anchor="ls")
+                for i, mark, dx, dy in moved:
+                    d.text((x0 + d.textlength(kept[:i], font=rf) + dx, base + dy), mark, font=rf, fill=fill, anchor="ls")
+            else:
+                d.text((x0, y0 + drop if is_emoji else y0), run, font=rf, fill=fill)
             x0 += d.textlength(run, font=rf)
 
     def clip(text, f, max_w, tail="…", force=False):
